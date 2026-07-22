@@ -4,6 +4,8 @@ import { dirname, resolve } from 'node:path'
 import { getAddress } from 'viem'
 import { z } from 'zod'
 
+export const ROBINHOOD_USDG_ADDRESS = getAddress('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168')
+
 const addressSchema = z
   .string()
   .trim()
@@ -50,7 +52,7 @@ export function loadConfig() {
     },
     walletAddress: parsed.WALLET_ADDRESS,
     robinhoodRpcUrl: parsed.ROBINHOOD_RPC_URL,
-    usdgAddress: parsed.USDG_ADDRESS,
+    usdgAddress: parsed.USDG_ADDRESS ?? ROBINHOOD_USDG_ADDRESS,
     contracts: {
       v3PositionManager: parsed.UNISWAP_V3_POSITION_MANAGER_ADDRESS,
       v4PositionManager: parsed.UNISWAP_V4_POSITION_MANAGER_ADDRESS,

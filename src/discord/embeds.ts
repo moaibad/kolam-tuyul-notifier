@@ -14,7 +14,9 @@ export const refreshButtonCustomId = 'kolam-refresh-now'
 export function buildPortfolioEmbed(portfolio: PortfolioSnapshot) {
   const inRange = portfolio.positions.filter((position) => position.status === 'in_range').length
   const outOfRange = portfolio.positions.length - inRange
-  const warnings = portfolio.warnings.length > 0 ? portfolio.warnings.map((warning) => `- ${warning}`).join('\n') : undefined
+  const accountingSynced = portfolio.positions.length === 0 || portfolio.positions.every((position) => position.accountingStatus === 'synced')
+  const accountingUnavailable = portfolio.positions.some((position) => position.accountingStatus === 'unavailable')
+  const warnings = portfolio.warnings.length > 0 ? trimText(portfolio.warnings.map((warning) => `- ${warning}`).join('\n'), 1_020) : undefined
 
   return new EmbedBuilder()
     .setColor(color.portfolio)
@@ -32,18 +34,20 @@ export function buildPortfolioEmbed(portfolio: PortfolioSnapshot) {
       {
         name: 'VALUE',
         value: formatRows([
-          ['Total Deposited', formatUsdg(portfolio.totals.depositedUsdg)],
-          ['Current LP Value', formatUsdg(portfolio.totals.currentLpValueUsdg)],
-          ['Total Fees', formatUsdg(feesTotal(portfolio.totals.claimedFeesUsdg, portfolio.totals.unclaimedFeesUsdg))],
-          ['Total Result', formatUsdg(portfolio.totals.totalResultUsdg)],
+          ['Total Deposited', accountingSynced ? formatMaybeUsdg(portfolio.totals.depositedUsdg) : accountingUnavailable ? 'Unavailable' : 'Synchronizing'],
+          ['Current LP Value', formatMaybeUsdg(portfolio.totals.currentLpValueUsdg)],
+          ['Total Fees', accountingSynced ? formatMaybeUsdg(feesTotal(portfolio.totals.claimedFeesUsdg, portfolio.totals.unclaimedFeesUsdg)) : accountingUnavailable ? 'Unavailable' : 'Synchronizing'],
+          ['Total Result', accountingSynced ? formatMaybeUsdg(portfolio.totals.totalResultUsdg) : accountingUnavailable ? 'Unavailable' : 'Synchronizing'],
         ]),
       },
       {
         name: 'PROFIT / LOSS',
-        value: formatRows([
-          ['PROFIT / LOSS', formatSignedUsdg(portfolio.totals.profitLossUsdg)],
-          ['', formatPercent(portfolio.totals.profitLossPercent)],
-        ]),
+        value: accountingSynced
+          ? formatRows([
+              ['PROFIT / LOSS', formatMaybeSignedUsdg(portfolio.totals.profitLossUsdg)],
+              ['', formatMaybePercent(portfolio.totals.profitLossPercent)],
+            ])
+          : accountingUnavailable ? 'Unavailable for one or more positions' : 'Synchronizing position history',
       },
       ...(warnings ? [{ name: 'WARNINGS', value: warnings }] : []),
     )
@@ -56,14 +60,14 @@ export function buildPositionEmbed(position: PositionSnapshot, outOfRangeEmphasi
   return new EmbedBuilder()
     .setColor(isOut ? color.outOfRange : color.inRange)
     .setTitle(`${position.token0.symbol} / ${position.token1.symbol}`)
-    .setDescription(`Uniswap ${position.version} · ${formatNumber(position.feeTier / 10_000, 2)}% fee`)
+    .setDescription(`Uniswap ${position.version} · ${position.feeLabel ?? `${formatNumber(position.feeTier / 10_000, 2)}%`} fee`)
     .addFields(
       { name: 'STATUS', value: `**${getPositionStatusLabel(position, outOfRangeEmphasisAfterMs, nowMs)}**` },
       {
         name: 'PRICE RANGE',
         value: formatRows([
-          ['Current Price', `${formatPrice(position.currentPriceUsdg)} USDG`],
-          ['Active Range', `${formatPrice(position.lowerPriceUsdg)} - ${formatPrice(position.upperPriceUsdg)}`],
+          ['Current Price', `${formatPrice(position.currentPrice)} ${position.quoteToken.symbol}`],
+          ['Active Range', `${formatPrice(position.lowerPrice)} - ${formatPrice(position.upperPrice)} ${position.quoteToken.symbol}`],
           ['Range', getRangeMarker(position)],
         ]),
       },
@@ -74,19 +78,21 @@ export function buildPositionEmbed(position: PositionSnapshot, outOfRangeEmphasi
       {
         name: 'PERFORMANCE',
         value: formatRows([
-          ['Initial Deposit', formatUsdg(position.depositedUsdg)],
-          ['Current LP Value', formatUsdg(position.currentLpValueUsdg)],
-          ['Unclaimed Fees', formatUsdg(position.unclaimedFeesUsdg)],
-          ['Claimed Fees', formatUsdg(position.claimedFeesUsdg)],
-          ['Total Result', formatUsdg(position.totalResultUsdg)],
+          ['Initial Deposit', accountingValue(position, position.depositedUsdg)],
+          ['Current LP Value', formatMaybeUsdg(position.currentLpValueUsdg)],
+          ['Unclaimed Fees', accountingValue(position, position.unclaimedFeesUsdg)],
+          ['Claimed Fees', accountingValue(position, position.claimedFeesUsdg)],
+          ['Total Result', accountingValue(position, position.totalResultUsdg)],
         ]),
       },
       {
         name: 'PROFIT / LOSS',
-        value: formatRows([
-          ['PROFIT / LOSS', formatSignedUsdg(position.profitLossUsdg)],
-          ['', formatPercent(position.profitLossPercent)],
-        ]),
+        value: position.accountingStatus === 'synced'
+          ? formatRows([
+              ['PROFIT / LOSS', formatMaybeSignedUsdg(position.profitLossUsdg)],
+              ['', formatMaybePercent(position.profitLossPercent)],
+            ])
+          : position.accountingStatus === 'unavailable' ? 'Unavailable' : 'Synchronizing position history',
       },
       {
         name: 'POSITION DETAILS',
@@ -109,8 +115,8 @@ export function buildTransitionAlertEmbed(alert: TransitionAlert) {
       {
         name: 'PRICE RANGE',
         value: formatRows([
-          ['Current Price', `${formatPrice(alert.position.currentPriceUsdg)} USDG`],
-          ['Active Range', `${formatPrice(alert.position.lowerPriceUsdg)} - ${formatPrice(alert.position.upperPriceUsdg)}`],
+          ['Current Price', `${formatPrice(alert.position.currentPrice)} ${alert.position.quoteToken.symbol}`],
+          ['Active Range', `${formatPrice(alert.position.lowerPrice)} - ${formatPrice(alert.position.upperPrice)} ${alert.position.quoteToken.symbol}`],
         ]),
       },
       {
@@ -171,6 +177,24 @@ function getRangeMarker(position: PositionSnapshot) {
 function formatPrice(value: number) {
   if (Math.abs(value) >= 1) return formatNumber(value, 3)
   return formatNumber(value, 6).replace(/0+$/, '').replace(/\.$/, '')
+}
+
+function accountingValue(position: PositionSnapshot, value: number | null) {
+  if (position.accountingStatus === 'unavailable') return 'Unavailable'
+  if (position.accountingStatus === 'syncing') return 'Synchronizing'
+  return formatMaybeUsdg(value)
+}
+
+function formatMaybeUsdg(value: number | null) {
+  return value == null ? 'Unavailable' : formatUsdg(value)
+}
+
+function formatMaybeSignedUsdg(value: number | null) {
+  return value == null ? 'Unavailable' : formatSignedUsdg(value)
+}
+
+function formatMaybePercent(value: number | null) {
+  return value == null ? 'Unavailable' : formatPercent(value)
 }
 
 function formatBlock(blockNumber: bigint) {

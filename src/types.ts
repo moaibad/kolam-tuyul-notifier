@@ -2,6 +2,7 @@ import type { Address, Hash } from 'viem'
 
 export type PositionVersion = 'v3' | 'v4'
 export type RangeStatus = 'in_range' | 'out_of_range'
+export type AccountingStatus = 'syncing' | 'synced' | 'unavailable'
 
 export interface TokenInfo {
   address: Address
@@ -13,7 +14,7 @@ export interface TokenAmountView {
   token: TokenInfo
   raw: bigint
   formatted: string
-  valueUsdg: number
+  valueUsdg: number | null
 }
 
 export interface PositionSnapshot {
@@ -24,27 +25,31 @@ export interface PositionSnapshot {
   poolAddress?: Address
   token0: TokenInfo
   token1: TokenInfo
+  quoteToken: TokenInfo
+  feeLabel?: string
   feeTier: number
   tickLower: number
   tickUpper: number
   currentTick: number
-  currentPriceUsdg: number
-  lowerPriceUsdg: number
-  upperPriceUsdg: number
+  currentPrice: number
+  lowerPrice: number
+  upperPrice: number
   liquidity: bigint
   status: RangeStatus
   outOfRangeSinceMs?: number
   mintTimestampMs: number
   blockNumber: bigint
   amounts: TokenAmountView[]
-  currentLpValueUsdg: number
-  claimedFeesUsdg: number
-  unclaimedFeesUsdg: number
-  depositedUsdg: number
-  withdrawnUsdg: number
-  totalResultUsdg: number
-  profitLossUsdg: number
-  profitLossPercent: number
+  currentLpValueUsdg: number | null
+  claimedFeesUsdg: number | null
+  unclaimedFeesUsdg: number | null
+  depositedUsdg: number | null
+  withdrawnUsdg: number | null
+  totalResultUsdg: number | null
+  profitLossUsdg: number | null
+  profitLossPercent: number | null
+  accountingStatus: AccountingStatus
+  accountingError?: string
   uniswapUrl: string
   explorerUrl: string
 }
@@ -55,13 +60,14 @@ export interface PortfolioSnapshot {
   updatedAtMs: number
   positions: PositionSnapshot[]
   totals: {
-    depositedUsdg: number
-    currentLpValueUsdg: number
-    claimedFeesUsdg: number
-    unclaimedFeesUsdg: number
-    totalResultUsdg: number
-    profitLossUsdg: number
-    profitLossPercent: number
+    depositedUsdg: number | null
+    currentLpValueUsdg: number | null
+    claimedFeesUsdg: number | null
+    unclaimedFeesUsdg: number | null
+    totalResultUsdg: number | null
+    profitLossUsdg: number | null
+    profitLossPercent: number | null
+    partial: boolean
   }
   warnings: string[]
 }

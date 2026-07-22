@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3'
 import type { Database as DatabaseType } from 'better-sqlite3'
 import type { RangeStatus } from '../types.js'
+import type { AccountingStatus, PositionVersion } from '../types.js'
 
 export interface StoredPositionStatus {
   positionId: string
@@ -59,6 +60,29 @@ export class StateDatabase {
         symbol TEXT NOT NULL,
         decimals INTEGER NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS position_accounting (
+        position_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        deposited_usdg REAL,
+        withdrawn_usdg REAL,
+        claimed_fees_usdg REAL,
+        last_synced_block TEXT,
+        error TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS position_cashflows_v2 (
+        position_id TEXT NOT NULL,
+        tx_hash TEXT NOT NULL,
+        log_index INTEGER NOT NULL,
+        block_number TEXT NOT NULL,
+        timestamp_ms INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        token0_raw TEXT NOT NULL,
+        token1_raw TEXT NOT NULL,
+        value_usdg REAL NOT NULL,
+        PRIMARY KEY (position_id, tx_hash, log_index, type)
+      );
     `)
   }
 
@@ -81,6 +105,29 @@ export class StateDatabase {
           mint_block = COALESCE(excluded.mint_block, positions.mint_block)
       `)
       .run(input.positionId, input.version, input.manager, input.tokenId.toString(), input.mintTimestampMs ?? null, input.mintBlock?.toString() ?? null)
+  }
+
+  listPositions(): Array<{ positionId: string; version: PositionVersion; manager: string; tokenId: bigint; mintTimestampMs?: number; mintBlock?: bigint }> {
+    const rows = this.db.prepare('SELECT position_id, version, manager, token_id, mint_timestamp_ms, mint_block FROM positions').all() as Array<{
+      position_id: string
+      version: PositionVersion
+      manager: string
+      token_id: string
+      mint_timestamp_ms: number | null
+      mint_block: string | null
+    }>
+    return rows.map((row) => ({
+      positionId: row.position_id,
+      version: row.version,
+      manager: row.manager,
+      tokenId: BigInt(row.token_id),
+      mintTimestampMs: row.mint_timestamp_ms ?? undefined,
+      mintBlock: row.mint_block ? BigInt(row.mint_block) : undefined,
+    }))
+  }
+
+  getPosition(positionId: string) {
+    return this.listPositions().find((position) => position.positionId === positionId)
   }
 
   getMintTimestamp(positionId: string): number | undefined {
@@ -106,16 +153,63 @@ export class StateDatabase {
   }
 
   getAccounting(positionId: string) {
-    const rows = this.db.prepare('SELECT type, SUM(amount_usdg) AS total FROM cashflows WHERE position_id = ? GROUP BY type').all(positionId) as Array<{ type: string; total: number }>
-    return rows.reduce(
-      (acc, row) => {
-        if (row.type === 'deposit') acc.depositedUsdg = row.total
-        if (row.type === 'withdrawal') acc.withdrawnUsdg = row.total
-        if (row.type === 'fee') acc.claimedFeesUsdg = row.total
-        return acc
-      },
-      { depositedUsdg: 0, withdrawnUsdg: 0, claimedFeesUsdg: 0 },
-    )
+    const row = this.db.prepare('SELECT status, deposited_usdg, withdrawn_usdg, claimed_fees_usdg, last_synced_block, error FROM position_accounting WHERE position_id = ?').get(positionId) as
+      | { status: AccountingStatus; deposited_usdg: number | null; withdrawn_usdg: number | null; claimed_fees_usdg: number | null; last_synced_block: string | null; error: string | null }
+      | undefined
+    return {
+      status: row?.status ?? ('syncing' as const),
+      depositedUsdg: row?.deposited_usdg ?? null,
+      withdrawnUsdg: row?.withdrawn_usdg ?? null,
+      claimedFeesUsdg: row?.claimed_fees_usdg ?? null,
+      lastSyncedBlock: row?.last_synced_block ? BigInt(row.last_synced_block) : undefined,
+      error: row?.error ?? undefined,
+    }
+  }
+
+
+  setAccounting(input: { positionId: string; status: AccountingStatus; depositedUsdg: number | null; withdrawnUsdg: number | null; claimedFeesUsdg: number | null; lastSyncedBlock?: bigint; error?: string }) {
+    this.db
+      .prepare(`
+        INSERT INTO position_accounting(position_id, status, deposited_usdg, withdrawn_usdg, claimed_fees_usdg, last_synced_block, error)
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(position_id) DO UPDATE SET
+          status = excluded.status,
+          deposited_usdg = excluded.deposited_usdg,
+          withdrawn_usdg = excluded.withdrawn_usdg,
+          claimed_fees_usdg = excluded.claimed_fees_usdg,
+          last_synced_block = excluded.last_synced_block,
+          error = excluded.error
+      `)
+      .run(input.positionId, input.status, input.depositedUsdg, input.withdrawnUsdg, input.claimedFeesUsdg, input.lastSyncedBlock?.toString() ?? null, input.error ?? null)
+  }
+
+  insertPositionCashflow(input: { positionId: string; txHash: string; logIndex: number; blockNumber: bigint; timestampMs: number; type: 'deposit' | 'withdrawal' | 'fee' | 'decrease' | 'principal_collect'; token0Raw: bigint; token1Raw: bigint; valueUsdg: number }) {
+    this.db
+      .prepare('INSERT OR IGNORE INTO position_cashflows_v2(position_id, tx_hash, log_index, block_number, timestamp_ms, type, token0_raw, token1_raw, value_usdg) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(input.positionId, input.txHash, input.logIndex, input.blockNumber.toString(), input.timestampMs, input.type, input.token0Raw.toString(), input.token1Raw.toString(), input.valueUsdg)
+  }
+
+  getPositionCashflowTotals(positionId: string) {
+    const rows = this.db.prepare('SELECT type, SUM(value_usdg) AS total FROM position_cashflows_v2 WHERE position_id = ? GROUP BY type').all(positionId) as Array<{ type: string; total: number }>
+    const totals = { depositedUsdg: 0, withdrawnUsdg: 0, claimedFeesUsdg: 0 }
+    for (const row of rows) {
+      if (row.type === 'deposit') totals.depositedUsdg = row.total
+      if (row.type === 'withdrawal') totals.withdrawnUsdg = row.total
+      if (row.type === 'fee') totals.claimedFeesUsdg = row.total
+    }
+    return totals
+  }
+
+  getPendingPrincipal(positionId: string): [bigint, bigint] {
+    const rows = this.db.prepare("SELECT type, token0_raw, token1_raw FROM position_cashflows_v2 WHERE position_id = ? AND type IN ('decrease', 'principal_collect')").all(positionId) as Array<{ type: string; token0_raw: string; token1_raw: string }>
+    let amount0 = 0n
+    let amount1 = 0n
+    for (const row of rows) {
+      const sign = row.type === 'decrease' ? 1n : -1n
+      amount0 += sign * BigInt(row.token0_raw)
+      amount1 += sign * BigInt(row.token1_raw)
+    }
+    return [amount0 > 0n ? amount0 : 0n, amount1 > 0n ? amount1 : 0n]
   }
 
   getToken(address: string) {

@@ -7,6 +7,7 @@ The bot is read-only. It does not need a wallet private key or seed phrase.
 ## Features
 
 - Tracks Uniswap v3 and v4 LP positions from a public wallet address.
+- Discovers v4 positions from the current Robinhood Blockscout NFT ownership API, with a SQLite cache and recent Transfer-log fallback.
 - Posts a Discord portfolio report every five minutes by default.
 - Shows one styled embed per open position.
 - Shows initial deposit, current LP value, claimed fees, unclaimed fees, total result, and profit/loss.
@@ -35,7 +36,7 @@ ROBINHOOD_RPC_URL=https://rpc.mainnet.chain.robinhood.com
 USDG_ADDRESS=
 ```
 
-If Uniswap's Robinhood Chain deployment metadata is not available from public docs/packages yet, set the verified contract overrides:
+The app bundles the official Robinhood Chain v3/v4 deployments and USDG token address. Leave these blank unless you need to override them:
 
 ```dotenv
 UNISWAP_V3_POSITION_MANAGER_ADDRESS=
@@ -69,5 +70,7 @@ npm run lint
 
 - `STATE_DATABASE_PATH=./data/notifier.sqlite` stores local public-chain state so restarts do not rescan all historical logs or reset out-of-range timers.
 - Public Robinhood RPC may rate-limit historical scans. For production, use an Alchemy Robinhood RPC URL.
-- The first run may show warnings if v3/v4 manager addresses are not configured. The Discord bot still starts and posts a summary explaining what is missing.
-- Position valuation assumes pools are directly paired with USDG.
+- The bundled v3 and v4 deployment metadata follows the official Uniswap deployment documentation for Robinhood Chain.
+- Profit/loss is shown only after position accounting history is synchronized. Unsupported hook accounting or unavailable historical RPC state is displayed as `Unavailable`, never as a fabricated zero.
+- Position valuation prefers a direct USDG pool and can route through one intermediate token using discovered v3/v4 pools. Positions without a safe route remain visible but make portfolio totals partial.
+- Full historical accounting requires an RPC that supports historical `eth_call`. The public Robinhood endpoint currently works for recent history; Alchemy is recommended for production reliability.
