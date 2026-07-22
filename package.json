@@ -1,0 +1,35 @@
+{
+  "name": "kolam-tuyul-notifier",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@uniswap/sdk-core": "latest",
+    "@uniswap/v3-sdk": "latest",
+    "@uniswap/v4-sdk": "latest",
+    "better-sqlite3": "latest",
+    "discord.js": "latest",
+    "dotenv": "latest",
+    "pino": "latest",
+    "viem": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "latest",
+    "@types/node": "latest",
+    "@typescript-eslint/eslint-plugin": "latest",
+    "@typescript-eslint/parser": "latest",
+    "eslint": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
+  }
+}

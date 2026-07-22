@@ -1,0 +1,73 @@
+# Kolam Tuyul Notifier
+
+Discord notifier for Uniswap LP positions on Robinhood Chain mainnet.
+
+The bot is read-only. It does not need a wallet private key or seed phrase.
+
+## Features
+
+- Tracks Uniswap v3 and v4 LP positions from a public wallet address.
+- Posts a Discord portfolio report every five minutes by default.
+- Shows one styled embed per open position.
+- Shows initial deposit, current LP value, claimed fees, unclaimed fees, total result, and profit/loss.
+- Does not show HODL comparison.
+- Shows position age from the original mint timestamp.
+- Sends a separate red alert when a position transitions from `IN RANGE` to `OUT OF RANGE`.
+- Keeps showing out-of-range duration in regular reports after 15 minutes.
+- Includes a `Refresh Now` Discord button with a 30-second global cooldown.
+- Stores sync/accounting/out-of-range state in SQLite.
+
+## Setup
+
+```bash
+npm install
+cp .env.example .env
+```
+
+Fill `.env`:
+
+```dotenv
+DISCORD_BOT_TOKEN=
+DISCORD_GUILD_ID=
+DISCORD_CHANNEL_ID=
+WALLET_ADDRESS=
+ROBINHOOD_RPC_URL=https://rpc.mainnet.chain.robinhood.com
+USDG_ADDRESS=
+```
+
+If Uniswap's Robinhood Chain deployment metadata is not available from public docs/packages yet, set the verified contract overrides:
+
+```dotenv
+UNISWAP_V3_POSITION_MANAGER_ADDRESS=
+UNISWAP_V4_POSITION_MANAGER_ADDRESS=
+UNISWAP_V4_POOL_MANAGER_ADDRESS=
+UNISWAP_V4_STATE_VIEW_ADDRESS=
+```
+
+## Run
+
+```bash
+npm run dev
+```
+
+Production:
+
+```bash
+npm run build
+npm start
+```
+
+## Verify
+
+```bash
+npm run typecheck
+npm test
+npm run lint
+```
+
+## Notes
+
+- `STATE_DATABASE_PATH=./data/notifier.sqlite` stores local public-chain state so restarts do not rescan all historical logs or reset out-of-range timers.
+- Public Robinhood RPC may rate-limit historical scans. For production, use an Alchemy Robinhood RPC URL.
+- The first run may show warnings if v3/v4 manager addresses are not configured. The Discord bot still starts and posts a summary explaining what is missing.
+- Position valuation assumes pools are directly paired with USDG.
