@@ -4,9 +4,10 @@ import { feesTotal } from '../uniswap/accounting.js'
 import { formatAge, formatNumber, formatPercent, formatSignedUsdg, formatUsdg } from '../uniswap/valuation.js'
 
 const color = {
-  portfolio: 0xff37c7,
+  neutral: 0x5865f2,
   inRange: 0x22c55e,
-  outOfRange: 0xef4444,
+  outOfRange: 0xf59e0b,
+  alert: 0xef4444,
 }
 
 export const refreshButtonCustomId = 'kolam-refresh-now'
@@ -16,141 +17,115 @@ export function buildPortfolioEmbed(portfolio: PortfolioSnapshot) {
   const outOfRange = portfolio.positions.length - inRange
   const accountingSynced = portfolio.positions.length === 0 || portfolio.positions.every((position) => position.accountingStatus === 'synced')
   const accountingUnavailable = portfolio.positions.some((position) => position.accountingStatus === 'unavailable')
-  const warnings = portfolio.warnings.length > 0 ? trimText(portfolio.warnings.map((warning) => `- ${warning}`).join('\n'), 1_020) : undefined
+  const isPartial = portfolio.totals.partial || !accountingSynced
+  const warnings = portfolio.warnings.length > 0 ? trimText(portfolio.warnings.map((warning) => `• ${warning}`).join('\n'), 1_024) : undefined
+  const accountingState = accountingUnavailable ? 'Unavailable' : 'Synchronizing'
+  const fees = feesTotal(portfolio.totals.claimedFeesUsdg, portfolio.totals.unclaimedFeesUsdg)
 
   return new EmbedBuilder()
-    .setColor(color.portfolio)
-    .setTitle('UNISWAP LP PORTFOLIO')
-    .setDescription(portfolio.chainName)
+    .setColor(getPortfolioColor(portfolio))
+    .setTitle('📊 Uniswap LP Portfolio')
+    .setDescription(`${portfolio.chainName}${isPartial ? ' · ⚠️ Partial data' : ''}`)
     .addFields(
+      metric('Open Positions', portfolio.positions.length.toString()),
+      metric('In Range', `🟢 ${inRange}`),
+      metric('Out of Range', outOfRange > 0 ? `🟠 ${outOfRange}` : outOfRange.toString()),
+      metric('Deposited', accountingSynced ? formatMaybeUsdg(portfolio.totals.depositedUsdg) : accountingState),
+      metric('LP Value', formatMaybeUsdg(portfolio.totals.currentLpValueUsdg)),
+      metric('Total Fees', accountingSynced ? formatMaybeUsdg(fees) : accountingState),
+      metric('Total Result', accountingSynced ? formatMaybeUsdg(portfolio.totals.totalResultUsdg) : accountingState),
       {
-        name: 'POSITIONS',
-        value: formatRows([
-          ['Open Positions', portfolio.positions.length.toString()],
-          ['In Range', inRange.toString()],
-          ['Out of Range', outOfRange.toString()],
-        ]),
-      },
-      {
-        name: 'VALUE',
-        value: formatRows([
-          ['Total Deposited', accountingSynced ? formatMaybeUsdg(portfolio.totals.depositedUsdg) : accountingUnavailable ? 'Unavailable' : 'Synchronizing'],
-          ['Current LP Value', formatMaybeUsdg(portfolio.totals.currentLpValueUsdg)],
-          ['Total Fees', accountingSynced ? formatMaybeUsdg(feesTotal(portfolio.totals.claimedFeesUsdg, portfolio.totals.unclaimedFeesUsdg)) : accountingUnavailable ? 'Unavailable' : 'Synchronizing'],
-          ['Total Result', accountingSynced ? formatMaybeUsdg(portfolio.totals.totalResultUsdg) : accountingUnavailable ? 'Unavailable' : 'Synchronizing'],
-        ]),
-      },
-      {
-        name: 'PROFIT / LOSS',
+        name: 'Profit / Loss',
         value: accountingSynced
-          ? formatRows([
-              ['PROFIT / LOSS', formatMaybeSignedUsdg(portfolio.totals.profitLossUsdg)],
-              ['', formatMaybePercent(portfolio.totals.profitLossPercent)],
-            ])
-          : accountingUnavailable ? 'Unavailable for one or more positions' : 'Synchronizing position history',
+          ? formatProfitLoss(portfolio.totals.profitLossUsdg, portfolio.totals.profitLossPercent)
+          : `*${accountingUnavailable ? 'Unavailable for one or more positions' : 'Synchronizing position history'}*`,
+        inline: true,
       },
-      ...(warnings ? [{ name: 'WARNINGS', value: warnings }] : []),
+      ...(warnings ? [{ name: '⚠️ Warnings', value: warnings }] : []),
     )
     .setFooter({ text: `Updated ${formatUtcTime(portfolio.updatedAtMs)} UTC · Block ${formatBlock(portfolio.blockNumber)}` })
 }
 
 export function buildPositionEmbed(position: PositionSnapshot, outOfRangeEmphasisAfterMs: number, nowMs = Date.now()) {
   const isOut = position.status === 'out_of_range'
+  const totalFees = feesTotal(position.claimedFeesUsdg, position.unclaimedFeesUsdg)
+  const accountingNotice = getAccountingNotice(position)
 
   return new EmbedBuilder()
-    .setColor(isOut ? color.outOfRange : color.inRange)
-    .setTitle(`${position.token0.symbol} / ${position.token1.symbol}`)
-    .setDescription(`Uniswap ${position.version} · ${position.feeLabel ?? `${formatNumber(position.feeTier / 10_000, 2)}%`} fee`)
+    .setColor(getPositionColor(position))
+    .setTitle(`${isOut ? '🟠' : '🟢'} ${position.token0.symbol} / ${position.token1.symbol}`)
+    .setDescription(`Uniswap ${position.version} · ${position.feeLabel ?? `${formatNumber(position.feeTier / 10_000, 2)}%`} fee · #${position.tokenId.toString()}`)
     .addFields(
-      { name: 'STATUS', value: `**${getPositionStatusLabel(position, outOfRangeEmphasisAfterMs, nowMs)}**` },
       {
-        name: 'PRICE RANGE',
-        value: formatRows([
-          ['Current Price', `${formatPrice(position.currentPrice)} ${position.quoteToken.symbol}`],
-          ['Active Range', `${formatPrice(position.lowerPrice)} - ${formatPrice(position.upperPrice)} ${position.quoteToken.symbol}`],
-          ['Range', getRangeMarker(position)],
-        ]),
+        name: 'Status',
+        value: `**${getPositionStatusLabel(position, outOfRangeEmphasisAfterMs, nowMs)}**`,
       },
+      priceMetric('Current Price', position.currentPrice, position.quoteToken.symbol),
+      priceMetric('Lower', position.lowerPrice, position.quoteToken.symbol),
+      priceMetric('Upper', position.upperPrice, position.quoteToken.symbol),
+      { name: 'Range Position', value: getRangeMarker(position) },
+      ...getAssetFields(position),
+      metric('Deposited', accountingValue(position, position.depositedUsdg)),
+      metric('LP Value', formatMaybeUsdg(position.currentLpValueUsdg)),
       {
-        name: 'CURRENT ASSETS',
-        value: position.amounts.length > 0 ? formatRows(position.amounts.map((amount) => [amount.token.symbol, amount.formatted])) : 'n/a',
-      },
-      {
-        name: 'PERFORMANCE',
-        value: formatRows([
-          ['Initial Deposit', accountingValue(position, position.depositedUsdg)],
-          ['Current LP Value', formatMaybeUsdg(position.currentLpValueUsdg)],
-          ['Unclaimed Fees', accountingValue(position, position.unclaimedFeesUsdg)],
-          ['Claimed Fees', accountingValue(position, position.claimedFeesUsdg)],
-          ['Total Result', accountingValue(position, position.totalResultUsdg)],
-        ]),
-      },
-      {
-        name: 'PROFIT / LOSS',
+        name: 'Total Fees',
         value: position.accountingStatus === 'synced'
-          ? formatRows([
-              ['PROFIT / LOSS', formatMaybeSignedUsdg(position.profitLossUsdg)],
-              ['', formatMaybePercent(position.profitLossPercent)],
-            ])
-          : position.accountingStatus === 'unavailable' ? 'Unavailable' : 'Synchronizing position history',
+          ? `**${formatMaybeUsdg(totalFees)}**\nClaimed ${formatMaybeUsdg(position.claimedFeesUsdg)}\nUnclaimed ${formatMaybeUsdg(position.unclaimedFeesUsdg)}`
+          : `**${accountingValue(position, totalFees)}**`,
+        inline: true,
       },
+      metric('Total Result', accountingValue(position, position.totalResultUsdg)),
       {
-        name: 'POSITION DETAILS',
-        value: formatRows([
-          ['Position Age', formatAge(nowMs, position.mintTimestampMs)],
-          ['Position ID', `#${position.tokenId.toString()}`],
-        ]),
+        name: 'Profit / Loss',
+        value: position.accountingStatus === 'synced'
+          ? formatProfitLoss(position.profitLossUsdg, position.profitLossPercent)
+          : `*${position.accountingStatus === 'unavailable' ? 'Unavailable' : 'Synchronizing'}*`,
+        inline: true,
       },
+      ...(accountingNotice ? [{ name: '⚠️ Accounting', value: accountingNotice }] : []),
     )
-    .setFooter({ text: `Block ${formatBlock(position.blockNumber)}` })
+    .setFooter({ text: `Age ${formatAge(nowMs, position.mintTimestampMs)} · Block ${formatBlock(position.blockNumber)}` })
 }
 
 export function buildTransitionAlertEmbed(alert: TransitionAlert) {
   return new EmbedBuilder()
-    .setColor(color.outOfRange)
-    .setTitle('POSITION LEFT RANGE')
-    .setDescription(`${alert.position.token0.symbol} / ${alert.position.token1.symbol} · Uniswap ${alert.position.version}`)
+    .setColor(color.alert)
+    .setTitle('🔴 Position Left Range')
+    .setDescription(`${alert.position.token0.symbol} / ${alert.position.token1.symbol} · Uniswap ${alert.position.version} · #${alert.position.tokenId.toString()}`)
     .addFields(
-      { name: 'STATUS', value: '**IN RANGE -> OUT OF RANGE**' },
-      {
-        name: 'PRICE RANGE',
-        value: formatRows([
-          ['Current Price', `${formatPrice(alert.position.currentPrice)} ${alert.position.quoteToken.symbol}`],
-          ['Active Range', `${formatPrice(alert.position.lowerPrice)} - ${formatPrice(alert.position.upperPrice)} ${alert.position.quoteToken.symbol}`],
-        ]),
-      },
-      {
-        name: 'POSITION DETAILS',
-        value: formatRows([
-          ['Position ID', `#${alert.position.tokenId.toString()}`],
-          ['Detected', `${formatUtcTime(alert.detectedAtMs)} UTC`],
-        ]),
-      },
+      { name: 'Status', value: '**IN RANGE → OUT OF RANGE**' },
+      priceMetric('Current Price', alert.position.currentPrice, alert.position.quoteToken.symbol),
+      priceMetric('Lower', alert.position.lowerPrice, alert.position.quoteToken.symbol),
+      priceMetric('Upper', alert.position.upperPrice, alert.position.quoteToken.symbol),
+      { name: 'Range Position', value: getRangeMarker(alert.position) },
+      { name: 'Detected', value: `**${formatUtcTime(alert.detectedAtMs)} UTC**`, inline: true },
     )
 }
 
 export function buildPortfolioButtons() {
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(refreshButtonCustomId).setLabel('Refresh Now').setStyle(ButtonStyle.Primary))
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(refreshButtonCustomId).setLabel('Refresh').setStyle(ButtonStyle.Primary))
 }
 
 export function buildPositionButtons(position: PositionSnapshot) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setLabel('View on Uniswap').setStyle(ButtonStyle.Link).setURL(position.uniswapUrl),
-    new ButtonBuilder().setLabel('View on Explorer').setStyle(ButtonStyle.Link).setURL(position.explorerUrl),
+    new ButtonBuilder().setLabel('Open Uniswap').setStyle(ButtonStyle.Link).setURL(position.uniswapUrl),
+    new ButtonBuilder().setLabel('Explorer').setStyle(ButtonStyle.Link).setURL(position.explorerUrl),
   )
 }
 
-const labelWidth = 31
-
-function formatRows(rows: Array<[string, string]>) {
-  return `\`\`\`text\n${rows.map(([label, value]) => row(label, value)).join('\n')}\n\`\`\``
+function metric(name: string, value: string) {
+  return { name, value: `**${value}**`, inline: true }
 }
 
-function row(label: string, value: string) {
-  const safeLabel = trimText(label, labelWidth)
-  const valueWidth = 22
-  const safeValue = trimText(value, valueWidth)
-  return `${safeLabel.padEnd(labelWidth)}${safeValue.padStart(valueWidth)}`
+function priceMetric(name: string, value: number, quoteSymbol: string) {
+  return metric(name, `${formatPrice(value)} ${quoteSymbol}`)
+}
+
+function getAssetFields(position: PositionSnapshot) {
+  if (position.amounts.length === 0) return [{ name: 'Current Assets', value: '*Unavailable*' }]
+  const fields = position.amounts.map((amount) => metric(amount.token.symbol, amount.formatted))
+  while (fields.length % 3 !== 0) fields.push({ name: '\u200b', value: '\u200b', inline: true })
+  return fields
 }
 
 function trimText(value: string, maxLength: number) {
@@ -169,9 +144,17 @@ function getPositionStatusLabel(position: PositionSnapshot, outOfRangeEmphasisAf
   return 'OUT OF RANGE'
 }
 
-function getRangeMarker(position: PositionSnapshot) {
-  if (position.status === 'in_range') return '|------●-------|'
-  return position.currentTick >= position.tickUpper ? '|--------------| ●' : '● |--------------|'
+const rangeSlots = 15
+
+function getRangeMarker(position: Pick<PositionSnapshot, 'currentTick' | 'tickLower' | 'tickUpper'>) {
+  const rangeLine = '─'.repeat(rangeSlots)
+  if (position.currentTick < position.tickLower) return `\`●  ├${rangeLine}┤\``
+  if (position.currentTick >= position.tickUpper) return `\`├${rangeLine}┤  ●\``
+
+  const tickSpan = position.tickUpper - position.tickLower
+  const progress = tickSpan > 0 ? (position.currentTick - position.tickLower) / tickSpan : 0
+  const pointIndex = Math.max(0, Math.min(rangeSlots - 1, Math.round(progress * (rangeSlots - 1))))
+  return `\`├${'─'.repeat(pointIndex)}●${'─'.repeat(rangeSlots - pointIndex - 1)}┤\``
 }
 
 function formatPrice(value: number) {
@@ -185,16 +168,29 @@ function accountingValue(position: PositionSnapshot, value: number | null) {
   return formatMaybeUsdg(value)
 }
 
+function getAccountingNotice(position: PositionSnapshot) {
+  if (position.accountingStatus === 'syncing') return '*Position history is still synchronizing.*'
+  if (position.accountingStatus !== 'unavailable') return undefined
+  return trimText(position.accountingError ? `Accounting unavailable: ${position.accountingError}` : 'Accounting is unavailable for this position.', 1_024)
+}
+
+function getPortfolioColor(portfolio: PortfolioSnapshot) {
+  if (portfolio.totals.partial || portfolio.totals.profitLossUsdg == null) return color.neutral
+  return portfolio.totals.profitLossUsdg < 0 ? color.alert : color.inRange
+}
+
+function getPositionColor(position: PositionSnapshot) {
+  if (position.accountingStatus !== 'synced') return color.neutral
+  return position.status === 'out_of_range' ? color.outOfRange : color.inRange
+}
+
+function formatProfitLoss(value: number | null, percent: number | null) {
+  if (value == null || percent == null) return '*Unavailable*'
+  return `**${formatSignedUsdg(value)}**\n${formatPercent(percent)}`
+}
+
 function formatMaybeUsdg(value: number | null) {
   return value == null ? 'Unavailable' : formatUsdg(value)
-}
-
-function formatMaybeSignedUsdg(value: number | null) {
-  return value == null ? 'Unavailable' : formatSignedUsdg(value)
-}
-
-function formatMaybePercent(value: number | null) {
-  return value == null ? 'Unavailable' : formatPercent(value)
 }
 
 function formatBlock(blockNumber: bigint) {
