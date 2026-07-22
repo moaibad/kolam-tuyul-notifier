@@ -26,4 +26,21 @@ describe('state database migrations', () => {
     database.insertPositionCashflow(cashflow)
     expect(database.getPositionCashflowTotals(cashflow.positionId).depositedUsdg).toBe(30)
   })
+
+  it('atomically activates a Discord report generation and retains stale messages for cleanup', () => {
+    const database = new StateDatabase(':memory:')
+    databases.push(database)
+    database.seedDiscordReportMessages([
+      { messageId: 'old', messageKey: 'portfolio', kind: 'portfolio', generation: 'legacy', status: 'current', createdAtMs: 1 },
+    ])
+
+    database.activateDiscordReportGeneration([
+      { messageId: 'new', messageKey: 'portfolio', kind: 'portfolio', generation: 'generation-2', status: 'current', createdAtMs: 2 },
+    ])
+
+    expect(database.listDiscordReportMessages('current').map((message) => message.messageId)).toEqual(['new'])
+    expect(database.listDiscordReportMessages('stale').map((message) => message.messageId)).toEqual(['old'])
+    database.deleteDiscordReportMessage('old')
+    expect(database.listDiscordReportMessages().map((message) => message.messageId)).toEqual(['new'])
+  })
 })

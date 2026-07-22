@@ -9,6 +9,16 @@ export interface StoredPositionStatus {
   outOfRangeSinceMs?: number
 }
 
+export interface StoredDiscordReportMessage {
+  messageId: string
+  messageKey: string
+  kind: 'portfolio' | 'position'
+  positionId?: string
+  generation: string
+  status: 'current' | 'stale'
+  createdAtMs: number
+}
+
 export class StateDatabase {
   readonly db: DatabaseType
 
@@ -83,7 +93,73 @@ export class StateDatabase {
         value_usdg REAL NOT NULL,
         PRIMARY KEY (position_id, tx_hash, log_index, type)
       );
+
+      CREATE TABLE IF NOT EXISTS discord_report_messages (
+        message_id TEXT PRIMARY KEY,
+        message_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        position_id TEXT,
+        generation TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at_ms INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS discord_report_messages_status_idx
+        ON discord_report_messages(status);
     `)
+  }
+
+  listDiscordReportMessages(status?: StoredDiscordReportMessage['status']): StoredDiscordReportMessage[] {
+    const rows = (status
+      ? this.db.prepare('SELECT message_id, message_key, kind, position_id, generation, status, created_at_ms FROM discord_report_messages WHERE status = ? ORDER BY created_at_ms DESC').all(status)
+      : this.db.prepare('SELECT message_id, message_key, kind, position_id, generation, status, created_at_ms FROM discord_report_messages ORDER BY created_at_ms DESC').all()) as Array<{
+        message_id: string
+        message_key: string
+        kind: StoredDiscordReportMessage['kind']
+        position_id: string | null
+        generation: string
+        status: StoredDiscordReportMessage['status']
+        created_at_ms: number
+      }>
+    return rows.map((row) => ({
+      messageId: row.message_id,
+      messageKey: row.message_key,
+      kind: row.kind,
+      positionId: row.position_id ?? undefined,
+      generation: row.generation,
+      status: row.status,
+      createdAtMs: row.created_at_ms,
+    }))
+  }
+
+  seedDiscordReportMessages(messages: StoredDiscordReportMessage[]) {
+    const insert = this.db.prepare(`
+      INSERT OR IGNORE INTO discord_report_messages(message_id, message_key, kind, position_id, generation, status, created_at_ms)
+      VALUES(?, ?, ?, ?, ?, ?, ?)
+    `)
+    this.db.transaction(() => {
+      for (const message of messages) {
+        insert.run(message.messageId, message.messageKey, message.kind, message.positionId ?? null, message.generation, message.status, message.createdAtMs)
+      }
+    })()
+  }
+
+  activateDiscordReportGeneration(messages: StoredDiscordReportMessage[]) {
+    const markStale = this.db.prepare("UPDATE discord_report_messages SET status = 'stale' WHERE status = 'current'")
+    const insert = this.db.prepare(`
+      INSERT INTO discord_report_messages(message_id, message_key, kind, position_id, generation, status, created_at_ms)
+      VALUES(?, ?, ?, ?, ?, ?, ?)
+    `)
+    this.db.transaction(() => {
+      markStale.run()
+      for (const message of messages) {
+        insert.run(message.messageId, message.messageKey, message.kind, message.positionId ?? null, message.generation, 'current', message.createdAtMs)
+      }
+    })()
+  }
+
+  deleteDiscordReportMessage(messageId: string) {
+    this.db.prepare('DELETE FROM discord_report_messages WHERE message_id = ?').run(messageId)
   }
 
   getSyncBlock(key: string): bigint | undefined {

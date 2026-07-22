@@ -4,6 +4,7 @@ import { createChainClient } from './chain.js'
 import { resolveDeployments, validateContractCode } from './contracts.js'
 import { createDiscordClient } from './discord/client.js'
 import { registerInteractions } from './discord/interactions.js'
+import { ReportPublisher } from './discord/publisher.js'
 import { RefreshService } from './refresh.js'
 import { startScheduler } from './scheduler.js'
 import { StateDatabase } from './state/database.js'
@@ -18,8 +19,9 @@ try {
   await validateContractCode(client, deployments)
   const discord = await createDiscordClient(config)
   const refreshService = new RefreshService(config, client, db, deployments)
-  registerInteractions({ client: discord.client, channel: discord.channel, refreshService, config })
-  const stopScheduler = await startScheduler({ refreshService, channel: discord.channel, config, logger })
+  const publisher = new ReportPublisher(discord.channel, config, db, logger)
+  registerInteractions({ client: discord.client, publisher, refreshService, config })
+  const stopScheduler = await startScheduler({ refreshService, publisher, config, logger })
 
   const shutdown = async () => {
     logger.info('shutting down')
