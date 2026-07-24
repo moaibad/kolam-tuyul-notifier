@@ -1,5 +1,4 @@
-import Database from 'better-sqlite3'
-import type { Database as DatabaseType } from 'better-sqlite3'
+import { createClient, type Client, type InValue, type Row } from '@libsql/client'
 import type { RangeStatus } from '../types.js'
 import type { AccountingStatus, PositionVersion } from '../types.js'
 
@@ -20,20 +19,18 @@ export interface StoredDiscordReportMessage {
 }
 
 export class StateDatabase {
-  readonly db: DatabaseType
+  readonly db: Client
 
   constructor(path: string) {
-    this.db = new Database(path)
-    this.db.pragma('journal_mode = WAL')
-    this.migrate()
+    this.db = createClient({ url: toLibsqlUrl(path) })
   }
 
   close() {
     this.db.close()
   }
 
-  private migrate() {
-    this.db.exec(`
+  async initialize() {
+    await this.db.executeMultiple(`
       CREATE TABLE IF NOT EXISTS sync_state (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -109,143 +106,112 @@ export class StateDatabase {
     `)
   }
 
-  listDiscordReportMessages(status?: StoredDiscordReportMessage['status']): StoredDiscordReportMessage[] {
-    const rows = (status
-      ? this.db.prepare('SELECT message_id, message_key, kind, position_id, generation, status, created_at_ms FROM discord_report_messages WHERE status = ? ORDER BY created_at_ms DESC').all(status)
-      : this.db.prepare('SELECT message_id, message_key, kind, position_id, generation, status, created_at_ms FROM discord_report_messages ORDER BY created_at_ms DESC').all()) as Array<{
-        message_id: string
-        message_key: string
-        kind: StoredDiscordReportMessage['kind']
-        position_id: string | null
-        generation: string
-        status: StoredDiscordReportMessage['status']
-        created_at_ms: number
-      }>
+  async listDiscordReportMessages(status?: StoredDiscordReportMessage['status']): Promise<StoredDiscordReportMessage[]> {
+    const result = await this.db.execute(status
+      ? { sql: 'SELECT message_id, message_key, kind, position_id, generation, status, created_at_ms FROM discord_report_messages WHERE status = ? ORDER BY created_at_ms DESC', args: [status] }
+      : 'SELECT message_id, message_key, kind, position_id, generation, status, created_at_ms FROM discord_report_messages ORDER BY created_at_ms DESC')
+    const rows = result.rows
     return rows.map((row) => ({
-      messageId: row.message_id,
-      messageKey: row.message_key,
-      kind: row.kind,
-      positionId: row.position_id ?? undefined,
-      generation: row.generation,
-      status: row.status,
-      createdAtMs: row.created_at_ms,
+      messageId: String(row.message_id),
+      messageKey: String(row.message_key),
+      kind: String(row.kind) as StoredDiscordReportMessage['kind'],
+      positionId: row.position_id == null ? undefined : String(row.position_id),
+      generation: String(row.generation),
+      status: String(row.status) as StoredDiscordReportMessage['status'],
+      createdAtMs: Number(row.created_at_ms),
     }))
   }
 
-  seedDiscordReportMessages(messages: StoredDiscordReportMessage[]) {
-    const insert = this.db.prepare(`
-      INSERT OR IGNORE INTO discord_report_messages(message_id, message_key, kind, position_id, generation, status, created_at_ms)
-      VALUES(?, ?, ?, ?, ?, ?, ?)
-    `)
-    this.db.transaction(() => {
-      for (const message of messages) {
-        insert.run(message.messageId, message.messageKey, message.kind, message.positionId ?? null, message.generation, message.status, message.createdAtMs)
-      }
-    })()
+  async seedDiscordReportMessages(messages: StoredDiscordReportMessage[]) {
+    if (messages.length === 0) return
+    await this.db.batch(messages.map((message) => statement(
+      'INSERT OR IGNORE INTO discord_report_messages(message_id, message_key, kind, position_id, generation, status, created_at_ms) VALUES(?, ?, ?, ?, ?, ?, ?)',
+      message.messageId, message.messageKey, message.kind, message.positionId ?? null, message.generation, message.status, message.createdAtMs,
+    )), 'write')
   }
 
-  activateDiscordReportGeneration(messages: StoredDiscordReportMessage[]) {
-    const markStale = this.db.prepare("UPDATE discord_report_messages SET status = 'stale' WHERE status = 'current'")
-    const insert = this.db.prepare(`
-      INSERT INTO discord_report_messages(message_id, message_key, kind, position_id, generation, status, created_at_ms)
-      VALUES(?, ?, ?, ?, ?, ?, ?)
-    `)
-    this.db.transaction(() => {
-      markStale.run()
-      for (const message of messages) {
-        insert.run(message.messageId, message.messageKey, message.kind, message.positionId ?? null, message.generation, 'current', message.createdAtMs)
-      }
-    })()
+  async activateDiscordReportGeneration(messages: StoredDiscordReportMessage[]) {
+    await this.db.batch([
+      { sql: "UPDATE discord_report_messages SET status = 'stale' WHERE status = 'current'", args: [] },
+      ...messages.map((message) => statement(
+        'INSERT INTO discord_report_messages(message_id, message_key, kind, position_id, generation, status, created_at_ms) VALUES(?, ?, ?, ?, ?, ?, ?)',
+        message.messageId, message.messageKey, message.kind, message.positionId ?? null, message.generation, 'current', message.createdAtMs,
+      )),
+    ], 'write')
   }
 
-  deleteDiscordReportMessage(messageId: string) {
-    this.db.prepare('DELETE FROM discord_report_messages WHERE message_id = ?').run(messageId)
+  async deleteDiscordReportMessage(messageId: string) {
+    await this.execute('DELETE FROM discord_report_messages WHERE message_id = ?', messageId)
   }
 
-  getSyncBlock(key: string): bigint | undefined {
-    const row = this.db.prepare('SELECT value FROM sync_state WHERE key = ?').get(key) as { value: string } | undefined
-    return row ? BigInt(row.value) : undefined
+  async getSyncBlock(key: string): Promise<bigint | undefined> {
+    const row = await this.first('SELECT value FROM sync_state WHERE key = ?', key)
+    return row ? BigInt(String(row.value)) : undefined
   }
 
-  setSyncBlock(key: string, blockNumber: bigint) {
-    this.db.prepare('INSERT INTO sync_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, blockNumber.toString())
+  async setSyncBlock(key: string, blockNumber: bigint) {
+    await this.execute('INSERT INTO sync_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, blockNumber.toString())
   }
 
-  upsertPosition(input: { positionId: string; version: string; manager: string; tokenId: bigint; mintTimestampMs?: number; mintBlock?: bigint }) {
-    this.db
-      .prepare(`
+  async upsertPosition(input: { positionId: string; version: string; manager: string; tokenId: bigint; mintTimestampMs?: number; mintBlock?: bigint }) {
+    await this.execute(`
         INSERT INTO positions(position_id, version, manager, token_id, mint_timestamp_ms, mint_block)
         VALUES(?, ?, ?, ?, ?, ?)
         ON CONFLICT(position_id) DO UPDATE SET
           mint_timestamp_ms = COALESCE(excluded.mint_timestamp_ms, positions.mint_timestamp_ms),
           mint_block = COALESCE(excluded.mint_block, positions.mint_block)
-      `)
-      .run(input.positionId, input.version, input.manager, input.tokenId.toString(), input.mintTimestampMs ?? null, input.mintBlock?.toString() ?? null)
+      `, input.positionId, input.version, input.manager, input.tokenId.toString(), input.mintTimestampMs ?? null, input.mintBlock?.toString() ?? null)
   }
 
-  listPositions(): Array<{ positionId: string; version: PositionVersion; manager: string; tokenId: bigint; mintTimestampMs?: number; mintBlock?: bigint }> {
-    const rows = this.db.prepare('SELECT position_id, version, manager, token_id, mint_timestamp_ms, mint_block FROM positions').all() as Array<{
-      position_id: string
-      version: PositionVersion
-      manager: string
-      token_id: string
-      mint_timestamp_ms: number | null
-      mint_block: string | null
-    }>
+  async listPositions(): Promise<Array<{ positionId: string; version: PositionVersion; manager: string; tokenId: bigint; mintTimestampMs?: number; mintBlock?: bigint }>> {
+    const rows = (await this.db.execute('SELECT position_id, version, manager, token_id, mint_timestamp_ms, mint_block FROM positions')).rows
     return rows.map((row) => ({
-      positionId: row.position_id,
-      version: row.version,
-      manager: row.manager,
-      tokenId: BigInt(row.token_id),
-      mintTimestampMs: row.mint_timestamp_ms ?? undefined,
-      mintBlock: row.mint_block ? BigInt(row.mint_block) : undefined,
+      positionId: String(row.position_id),
+      version: String(row.version) as PositionVersion,
+      manager: String(row.manager),
+      tokenId: BigInt(String(row.token_id)),
+      mintTimestampMs: row.mint_timestamp_ms == null ? undefined : Number(row.mint_timestamp_ms),
+      mintBlock: row.mint_block == null ? undefined : BigInt(String(row.mint_block)),
     }))
   }
 
-  getPosition(positionId: string) {
-    return this.listPositions().find((position) => position.positionId === positionId)
+  async getPosition(positionId: string) {
+    return (await this.listPositions()).find((position) => position.positionId === positionId)
   }
 
-  getMintTimestamp(positionId: string): number | undefined {
-    const row = this.db.prepare('SELECT mint_timestamp_ms FROM positions WHERE position_id = ?').get(positionId) as { mint_timestamp_ms: number | null } | undefined
-    return row?.mint_timestamp_ms ?? undefined
+  async getMintTimestamp(positionId: string): Promise<number | undefined> {
+    const row = await this.first('SELECT mint_timestamp_ms FROM positions WHERE position_id = ?', positionId)
+    return row?.mint_timestamp_ms == null ? undefined : Number(row.mint_timestamp_ms)
   }
 
-  getPositionStatus(positionId: string): StoredPositionStatus {
-    const row = this.db.prepare('SELECT last_status, out_of_range_since_ms FROM position_status WHERE position_id = ?').get(positionId) as { last_status: RangeStatus | null; out_of_range_since_ms: number | null } | undefined
-    return { positionId, lastStatus: row?.last_status ?? undefined, outOfRangeSinceMs: row?.out_of_range_since_ms ?? undefined }
+  async getPositionStatus(positionId: string): Promise<StoredPositionStatus> {
+    const row = await this.first('SELECT last_status, out_of_range_since_ms FROM position_status WHERE position_id = ?', positionId)
+    return { positionId, lastStatus: row?.last_status == null ? undefined : String(row.last_status) as RangeStatus, outOfRangeSinceMs: row?.out_of_range_since_ms == null ? undefined : Number(row.out_of_range_since_ms) }
   }
 
-  setPositionStatus(positionId: string, status: RangeStatus, outOfRangeSinceMs?: number) {
-    this.db
-      .prepare('INSERT INTO position_status(position_id, last_status, out_of_range_since_ms) VALUES(?, ?, ?) ON CONFLICT(position_id) DO UPDATE SET last_status = excluded.last_status, out_of_range_since_ms = excluded.out_of_range_since_ms')
-      .run(positionId, status, outOfRangeSinceMs ?? null)
+  async setPositionStatus(positionId: string, status: RangeStatus, outOfRangeSinceMs?: number) {
+    await this.execute('INSERT INTO position_status(position_id, last_status, out_of_range_since_ms) VALUES(?, ?, ?) ON CONFLICT(position_id) DO UPDATE SET last_status = excluded.last_status, out_of_range_since_ms = excluded.out_of_range_since_ms', positionId, status, outOfRangeSinceMs ?? null)
   }
 
-  insertCashflow(input: { txHash: string; logIndex: number; positionId: string; blockNumber: bigint; timestampMs: number; type: string; amountUsdg: number }) {
-    this.db
-      .prepare('INSERT OR IGNORE INTO cashflows(tx_hash, log_index, position_id, block_number, timestamp_ms, type, amount_usdg) VALUES(?, ?, ?, ?, ?, ?, ?)')
-      .run(input.txHash, input.logIndex, input.positionId, input.blockNumber.toString(), input.timestampMs, input.type, input.amountUsdg)
+  async insertCashflow(input: { txHash: string; logIndex: number; positionId: string; blockNumber: bigint; timestampMs: number; type: string; amountUsdg: number }) {
+    await this.execute('INSERT OR IGNORE INTO cashflows(tx_hash, log_index, position_id, block_number, timestamp_ms, type, amount_usdg) VALUES(?, ?, ?, ?, ?, ?, ?)', input.txHash, input.logIndex, input.positionId, input.blockNumber.toString(), input.timestampMs, input.type, input.amountUsdg)
   }
 
-  getAccounting(positionId: string) {
-    const row = this.db.prepare('SELECT status, deposited_usdg, withdrawn_usdg, claimed_fees_usdg, last_synced_block, error FROM position_accounting WHERE position_id = ?').get(positionId) as
-      | { status: AccountingStatus; deposited_usdg: number | null; withdrawn_usdg: number | null; claimed_fees_usdg: number | null; last_synced_block: string | null; error: string | null }
-      | undefined
+  async getAccounting(positionId: string) {
+    const row = await this.first('SELECT status, deposited_usdg, withdrawn_usdg, claimed_fees_usdg, last_synced_block, error FROM position_accounting WHERE position_id = ?', positionId)
     return {
-      status: row?.status ?? ('syncing' as const),
-      depositedUsdg: row?.deposited_usdg ?? null,
-      withdrawnUsdg: row?.withdrawn_usdg ?? null,
-      claimedFeesUsdg: row?.claimed_fees_usdg ?? null,
-      lastSyncedBlock: row?.last_synced_block ? BigInt(row.last_synced_block) : undefined,
-      error: row?.error ?? undefined,
+      status: row?.status == null ? ('syncing' as const) : String(row.status) as AccountingStatus,
+      depositedUsdg: row?.deposited_usdg == null ? null : Number(row.deposited_usdg),
+      withdrawnUsdg: row?.withdrawn_usdg == null ? null : Number(row.withdrawn_usdg),
+      claimedFeesUsdg: row?.claimed_fees_usdg == null ? null : Number(row.claimed_fees_usdg),
+      lastSyncedBlock: row?.last_synced_block == null ? undefined : BigInt(String(row.last_synced_block)),
+      error: row?.error == null ? undefined : String(row.error),
     }
   }
 
 
-  setAccounting(input: { positionId: string; status: AccountingStatus; depositedUsdg: number | null; withdrawnUsdg: number | null; claimedFeesUsdg: number | null; lastSyncedBlock?: bigint; error?: string }) {
-    this.db
-      .prepare(`
+  async setAccounting(input: { positionId: string; status: AccountingStatus; depositedUsdg: number | null; withdrawnUsdg: number | null; claimedFeesUsdg: number | null; lastSyncedBlock?: bigint; error?: string }) {
+    await this.execute(`
         INSERT INTO position_accounting(position_id, status, deposited_usdg, withdrawn_usdg, claimed_fees_usdg, last_synced_block, error)
         VALUES(?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(position_id) DO UPDATE SET
@@ -255,44 +221,60 @@ export class StateDatabase {
           claimed_fees_usdg = excluded.claimed_fees_usdg,
           last_synced_block = excluded.last_synced_block,
           error = excluded.error
-      `)
-      .run(input.positionId, input.status, input.depositedUsdg, input.withdrawnUsdg, input.claimedFeesUsdg, input.lastSyncedBlock?.toString() ?? null, input.error ?? null)
+      `, input.positionId, input.status, input.depositedUsdg, input.withdrawnUsdg, input.claimedFeesUsdg, input.lastSyncedBlock?.toString() ?? null, input.error ?? null)
   }
 
-  insertPositionCashflow(input: { positionId: string; txHash: string; logIndex: number; blockNumber: bigint; timestampMs: number; type: 'deposit' | 'withdrawal' | 'fee' | 'decrease' | 'principal_collect'; token0Raw: bigint; token1Raw: bigint; valueUsdg: number }) {
-    this.db
-      .prepare('INSERT OR IGNORE INTO position_cashflows_v2(position_id, tx_hash, log_index, block_number, timestamp_ms, type, token0_raw, token1_raw, value_usdg) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(input.positionId, input.txHash, input.logIndex, input.blockNumber.toString(), input.timestampMs, input.type, input.token0Raw.toString(), input.token1Raw.toString(), input.valueUsdg)
+  async insertPositionCashflow(input: { positionId: string; txHash: string; logIndex: number; blockNumber: bigint; timestampMs: number; type: 'deposit' | 'withdrawal' | 'fee' | 'decrease' | 'principal_collect'; token0Raw: bigint; token1Raw: bigint; valueUsdg: number }) {
+    await this.execute('INSERT OR IGNORE INTO position_cashflows_v2(position_id, tx_hash, log_index, block_number, timestamp_ms, type, token0_raw, token1_raw, value_usdg) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)', input.positionId, input.txHash, input.logIndex, input.blockNumber.toString(), input.timestampMs, input.type, input.token0Raw.toString(), input.token1Raw.toString(), input.valueUsdg)
   }
 
-  getPositionCashflowTotals(positionId: string) {
-    const rows = this.db.prepare('SELECT type, SUM(value_usdg) AS total FROM position_cashflows_v2 WHERE position_id = ? GROUP BY type').all(positionId) as Array<{ type: string; total: number }>
+  async getPositionCashflowTotals(positionId: string) {
+    const rows = (await this.db.execute({ sql: 'SELECT type, SUM(value_usdg) AS total FROM position_cashflows_v2 WHERE position_id = ? GROUP BY type', args: [positionId] })).rows
     const totals = { depositedUsdg: 0, withdrawnUsdg: 0, claimedFeesUsdg: 0 }
     for (const row of rows) {
-      if (row.type === 'deposit') totals.depositedUsdg = row.total
-      if (row.type === 'withdrawal') totals.withdrawnUsdg = row.total
-      if (row.type === 'fee') totals.claimedFeesUsdg = row.total
+      if (row.type === 'deposit') totals.depositedUsdg = Number(row.total)
+      if (row.type === 'withdrawal') totals.withdrawnUsdg = Number(row.total)
+      if (row.type === 'fee') totals.claimedFeesUsdg = Number(row.total)
     }
     return totals
   }
 
-  getPendingPrincipal(positionId: string): [bigint, bigint] {
-    const rows = this.db.prepare("SELECT type, token0_raw, token1_raw FROM position_cashflows_v2 WHERE position_id = ? AND type IN ('decrease', 'principal_collect')").all(positionId) as Array<{ type: string; token0_raw: string; token1_raw: string }>
+  async getPendingPrincipal(positionId: string): Promise<[bigint, bigint]> {
+    const rows = (await this.db.execute({ sql: "SELECT type, token0_raw, token1_raw FROM position_cashflows_v2 WHERE position_id = ? AND type IN ('decrease', 'principal_collect')", args: [positionId] })).rows
     let amount0 = 0n
     let amount1 = 0n
     for (const row of rows) {
       const sign = row.type === 'decrease' ? 1n : -1n
-      amount0 += sign * BigInt(row.token0_raw)
-      amount1 += sign * BigInt(row.token1_raw)
+      amount0 += sign * BigInt(String(row.token0_raw))
+      amount1 += sign * BigInt(String(row.token1_raw))
     }
     return [amount0 > 0n ? amount0 : 0n, amount1 > 0n ? amount1 : 0n]
   }
 
-  getToken(address: string) {
-    return this.db.prepare('SELECT symbol, decimals FROM token_metadata WHERE address = ?').get(address.toLowerCase()) as { symbol: string; decimals: number } | undefined
+  async getToken(address: string) {
+    const row = await this.first('SELECT symbol, decimals FROM token_metadata WHERE address = ?', address.toLowerCase())
+    return row ? { symbol: String(row.symbol), decimals: Number(row.decimals) } : undefined
   }
 
-  setToken(address: string, symbol: string, decimals: number) {
-    this.db.prepare('INSERT INTO token_metadata(address, symbol, decimals) VALUES(?, ?, ?) ON CONFLICT(address) DO UPDATE SET symbol = excluded.symbol, decimals = excluded.decimals').run(address.toLowerCase(), symbol, decimals)
+  async setToken(address: string, symbol: string, decimals: number) {
+    await this.execute('INSERT INTO token_metadata(address, symbol, decimals) VALUES(?, ?, ?) ON CONFLICT(address) DO UPDATE SET symbol = excluded.symbol, decimals = excluded.decimals', address.toLowerCase(), symbol, decimals)
   }
+
+  private async execute(sql: string, ...args: InValue[]) {
+    return this.db.execute({ sql, args })
+  }
+
+  private async first(sql: string, ...args: InValue[]): Promise<Row | undefined> {
+    return (await this.execute(sql, ...args)).rows[0]
+  }
+}
+
+function statement(sql: string, ...args: InValue[]) {
+  return { sql, args }
+}
+
+function toLibsqlUrl(path: string) {
+  if (path === ':memory:') return ':memory:'
+  if (/^(file|libsql|https?):/.test(path)) return path
+  return `file:${path.replaceAll('\\', '/')}`
 }

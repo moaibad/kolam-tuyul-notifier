@@ -27,10 +27,10 @@ export async function syncPositionAccounting(input: {
     if (!mint) throw new Error('Mint block was not available from Blockscout')
     if (input.data.position.version === 'v3') await syncV3({ ...input, mintBlock: mint.blockNumber })
     else await syncV4({ ...input, mintBlock: mint.blockNumber })
-    const totals = input.db.getPositionCashflowTotals(input.data.id)
-    input.db.setAccounting({ positionId: input.data.id, status: 'synced', ...totals, lastSyncedBlock: input.blockNumber })
+    const totals = await input.db.getPositionCashflowTotals(input.data.id)
+    await input.db.setAccounting({ positionId: input.data.id, status: 'synced', ...totals, lastSyncedBlock: input.blockNumber })
   } catch (error) {
-    input.db.setAccounting({
+    await input.db.setAccounting({
       positionId: input.data.id,
       status: 'unavailable',
       depositedUsdg: null,
@@ -43,7 +43,7 @@ export async function syncPositionAccounting(input: {
 
 async function syncV4(input: Parameters<typeof syncPositionAccounting>[0] & { mintBlock: bigint }) {
   if (!input.deployments.v4PoolManager || !input.deployments.v4StateView || !input.data.poolId) throw new Error('Uniswap v4 accounting contracts are not configured')
-  const existing = input.db.getAccounting(input.data.id)
+  const existing = await input.db.getAccounting(input.data.id)
   const fromBlock = existing.lastSyncedBlock != null ? existing.lastSyncedBlock + 1n : input.mintBlock
   if (fromBlock > input.blockNumber) return
   const logs = await getEventsChunked(input.client, {
@@ -84,7 +84,7 @@ async function syncV4(input: Parameters<typeof syncPositionAccounting>[0] & { mi
     const fee0 = (modSub(beforeGrowth[0], beforePosition[1]) * beforePosition[0]) / Q128
     const fee1 = (modSub(beforeGrowth[1], beforePosition[2]) * beforePosition[0]) / Q128
     if (fee0 > 0n || fee1 > 0n) {
-      input.db.insertPositionCashflow({
+      await input.db.insertPositionCashflow({
         positionId: input.data.id,
         txHash: log.transactionHash,
         logIndex: log.logIndex,
@@ -101,7 +101,7 @@ async function syncV4(input: Parameters<typeof syncPositionAccounting>[0] & { mi
     const [amount0, amount1] = getAmountsForLiquidity(slot0[0], slot0[1], input.data.tickLower, input.data.tickUpper, delta)
     const value = await valuePair(input.oracle, input.data, amount0, amount1, log.blockNumber)
     const timestampMs = await blockTimestamp(input.client, log.blockNumber)
-    input.db.insertPositionCashflow({
+    await input.db.insertPositionCashflow({
       positionId: input.data.id,
       txHash: log.transactionHash,
       logIndex: log.logIndex,
@@ -137,7 +137,7 @@ async function syncV3(input: Parameters<typeof syncPositionAccounting>[0] & { mi
       const decrease1 = log.args.amount1 ?? 0n
       pending0 += decrease0
       pending1 += decrease1
-      input.db.insertPositionCashflow({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber, timestampMs: await blockTimestamp(input.client, log.blockNumber), type: 'decrease', token0Raw: decrease0, token1Raw: decrease1, valueUsdg: 0 })
+      await input.db.insertPositionCashflow({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber, timestampMs: await blockTimestamp(input.client, log.blockNumber), type: 'decrease', token0Raw: decrease0, token1Raw: decrease1, valueUsdg: 0 })
       continue
     }
     const raw0 = log.args.amount0 ?? 0n
@@ -150,8 +150,8 @@ async function syncV3(input: Parameters<typeof syncPositionAccounting>[0] & { mi
       const principal1 = raw1 < pending1 ? raw1 : pending1
       if (principal0 > 0n || principal1 > 0n) {
         const value = await valuePair(input.oracle, input.data, principal0, principal1, log.blockNumber)
-        input.db.insertPositionCashflow({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber, timestampMs: await blockTimestamp(input.client, log.blockNumber), type: 'withdrawal', token0Raw: principal0, token1Raw: principal1, valueUsdg: value })
-        input.db.insertPositionCashflow({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber, timestampMs: await blockTimestamp(input.client, log.blockNumber), type: 'principal_collect', token0Raw: principal0, token1Raw: principal1, valueUsdg: 0 })
+        await input.db.insertPositionCashflow({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber, timestampMs: await blockTimestamp(input.client, log.blockNumber), type: 'withdrawal', token0Raw: principal0, token1Raw: principal1, valueUsdg: value })
+        await input.db.insertPositionCashflow({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber, timestampMs: await blockTimestamp(input.client, log.blockNumber), type: 'principal_collect', token0Raw: principal0, token1Raw: principal1, valueUsdg: 0 })
       }
       pending0 -= principal0
       pending1 -= principal1
@@ -161,10 +161,10 @@ async function syncV3(input: Parameters<typeof syncPositionAccounting>[0] & { mi
     }
     if (amount0 === 0n && amount1 === 0n) continue
     const value = await valuePair(input.oracle, input.data, amount0, amount1, log.blockNumber)
-    input.db.insertPositionCashflow({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber, timestampMs: await blockTimestamp(input.client, log.blockNumber), type, token0Raw: amount0, token1Raw: amount1, valueUsdg: value })
+    await input.db.insertPositionCashflow({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber, timestampMs: await blockTimestamp(input.client, log.blockNumber), type, token0Raw: amount0, token1Raw: amount1, valueUsdg: value })
   }
   if (increases.length === 0) throw new Error('No v3 deposit history was found for this NFT')
-  const pending = input.db.getPendingPrincipal(input.data.id)
+  const pending = await input.db.getPendingPrincipal(input.data.id)
   const newlyIndexed0 = pending[0] - (input.data.pendingPrincipal0 ?? 0n)
   const newlyIndexed1 = pending[1] - (input.data.pendingPrincipal1 ?? 0n)
   if (newlyIndexed0 > 0n) input.data.unclaimed0 = input.data.unclaimed0 > newlyIndexed0 ? input.data.unclaimed0 - newlyIndexed0 : 0n
@@ -172,7 +172,7 @@ async function syncV3(input: Parameters<typeof syncPositionAccounting>[0] & { mi
 }
 
 async function ensureMintInfo(client: PublicClient, db: StateDatabase, data: PositionData) {
-  const stored = db.getPosition(data.id)
+  const stored = await db.getPosition(data.id)
   if (stored?.mintBlock != null && stored.mintTimestampMs != null) return { blockNumber: stored.mintBlock, timestampMs: stored.mintTimestampMs }
   const url = `https://robinhoodchain.blockscout.com/api/v2/tokens/${data.position.manager}/instances/${data.position.tokenId.toString()}/transfers`
   const response = await fetch(url)
@@ -181,7 +181,7 @@ async function ensureMintInfo(client: PublicClient, db: StateDatabase, data: Pos
   const mint = json.items?.find((item) => item.from?.hash && getAddress(item.from.hash) === zeroAddress)
   if (mint?.block_number == null || !mint.timestamp) return undefined
   const result = { blockNumber: BigInt(mint.block_number), timestampMs: Date.parse(mint.timestamp) }
-  db.upsertPosition({ positionId: data.id, version: data.position.version, manager: data.position.manager, tokenId: data.position.tokenId, mintBlock: result.blockNumber, mintTimestampMs: result.timestampMs })
+  await db.upsertPosition({ positionId: data.id, version: data.position.version, manager: data.position.manager, tokenId: data.position.tokenId, mintBlock: result.blockNumber, mintTimestampMs: result.timestampMs })
   return result
 }
 

@@ -76,7 +76,7 @@ export class ReportPublisher {
         })
       }
 
-      this.db.activateDiscordReportGeneration(storedMessages)
+      await this.db.activateDiscordReportGeneration(storedMessages)
     } catch (error) {
       await this.rollbackMessages(sentMessages)
       throw error
@@ -86,7 +86,7 @@ export class ReportPublisher {
   }
 
   private async registerLegacyReports() {
-    if (this.legacyScanAttempted || this.db.listDiscordReportMessages().length > 0) return
+    if (this.legacyScanAttempted || (await this.db.listDiscordReportMessages()).length > 0) return
     this.legacyScanAttempted = true
 
     try {
@@ -113,7 +113,7 @@ export class ReportPublisher {
 
       reports.sort((left, right) => right.createdAtMs - left.createdAtMs)
       const currentKeys = new Set<string>()
-      this.db.seedDiscordReportMessages(reports.map((report) => {
+      await this.db.seedDiscordReportMessages(reports.map((report) => {
         const status = currentKeys.has(report.messageKey) ? 'stale' : 'current'
         currentKeys.add(report.messageKey)
         return { ...report, generation: 'legacy', status }
@@ -124,13 +124,13 @@ export class ReportPublisher {
   }
 
   private async cleanupStaleReports() {
-    for (const message of this.db.listDiscordReportMessages('stale')) {
+    for (const message of await this.db.listDiscordReportMessages('stale')) {
       try {
         await this.channel.messages.delete(message.messageId)
-        this.db.deleteDiscordReportMessage(message.messageId)
+        await this.db.deleteDiscordReportMessage(message.messageId)
       } catch (error) {
         if (isUnknownMessage(error)) {
-          this.db.deleteDiscordReportMessage(message.messageId)
+          await this.db.deleteDiscordReportMessage(message.messageId)
           continue
         }
         this.logger.warn({ error, messageId: message.messageId }, 'could not delete stale Discord report message; cleanup will retry')

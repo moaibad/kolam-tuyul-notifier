@@ -12,10 +12,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@libsql/client": "^0.17.4",
     "@uniswap/sdk-core": "latest",
     "@uniswap/v3-sdk": "latest",
     "@uniswap/v4-sdk": "latest",
-    "better-sqlite3": "latest",
     "discord.js": "latest",
     "dotenv": "latest",
     "pino": "latest",
@@ -23,7 +23,6 @@
     "zod": "latest"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "latest",
     "@types/node": "latest",
     "@typescript-eslint/eslint-plugin": "latest",
     "@typescript-eslint/parser": "latest",

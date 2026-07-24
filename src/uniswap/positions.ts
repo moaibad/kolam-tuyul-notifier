@@ -65,7 +65,7 @@ async function loadV3Position(input: PositionInput): Promise<PositionData> {
   if (poolAddress === zeroAddress) throw new Error(`No v3 pool found for position #${input.position.tokenId}`)
   const slot0 = await input.client.readContract({ address: poolAddress, abi: v3PoolAbi, functionName: 'slot0' })
   const unclaimed = await getV3UnclaimedFees(input.client, poolAddress, raw)
-  const pendingPrincipal = input.db.getPendingPrincipal(positionId(input.position))
+  const pendingPrincipal = await input.db.getPendingPrincipal(positionId(input.position))
   const id = positionId(input.position)
   const priceSource: PoolPriceSource = {
     key: `v3:${poolAddress.toLowerCase()}`,
@@ -165,13 +165,13 @@ export async function buildPositionSnapshot(input: {
 }): Promise<PositionSnapshot | undefined> {
   const position = input.data
   if (position.liquidity === 0n) return undefined
-  const stored = input.db.getPosition(position.id)
+  const stored = await input.db.getPosition(position.id)
   const mintTimestampMs = stored?.mintTimestampMs ?? input.nowMs
-  const accounting = input.db.getAccounting(position.id)
+  const accounting = await input.db.getAccounting(position.id)
   const quoteToken = selectQuoteToken(position.token0, position.token1, input.oracle.usdgAddress)
   const prices = quotePrices({ ...position, quoteToken })
   const status = getRangeStatus(position.currentTick, position.tickLower, position.tickUpper)
-  const previous = input.db.getPositionStatus(position.id)
+  const previous = await input.db.getPositionStatus(position.id)
   const outOfRangeSinceMs = status === 'out_of_range' ? previous.outOfRangeSinceMs ?? input.nowMs : undefined
   const [amount0Raw, amount1Raw] = getAmountsForLiquidity(position.sqrtPriceX96, position.currentTick, position.tickLower, position.tickUpper, position.liquidity)
   const [value0, value1, unclaimedValue0, unclaimedValue1] = await Promise.all([
@@ -237,13 +237,13 @@ export function createPriceOracle(data: PositionData[], usdgAddress: Address) {
 
 async function getTokenInfo(client: PublicClient, db: StateDatabase, address: Address): Promise<TokenInfo> {
   if (address === zeroAddress) return nativeEth
-  const cached = db.getToken(address)
+  const cached = await db.getToken(address)
   if (cached) return { address, ...cached }
   const [symbol, decimals] = await Promise.all([
     client.readContract({ address, abi: erc20Abi, functionName: 'symbol' }),
     client.readContract({ address, abi: erc20Abi, functionName: 'decimals' }),
   ])
-  db.setToken(address, symbol, decimals)
+  await db.setToken(address, symbol, decimals)
   return { address, symbol, decimals }
 }
 

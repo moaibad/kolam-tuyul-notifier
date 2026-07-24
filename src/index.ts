@@ -16,6 +16,7 @@ const client = createChainClient(config)
 const deployments = resolveDeployments()
 
 try {
+  await db.initialize()
   await validateContractCode(client, deployments)
   const discord = await createDiscordClient(config)
   const refreshService = new RefreshService(config, client, db, deployments)

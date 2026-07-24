@@ -49,11 +49,11 @@ export class RefreshService {
       await syncPositionAccounting({ client: this.client, db: this.db, data, oracle, deployments: this.deployments, blockNumber })
       const snapshot = await buildPositionSnapshot({ client: this.client, db: this.db, data, oracle, walletAddress: this.config.walletAddress, blockNumber, nowMs })
       if (!snapshot) continue
-      const previous = this.db.getPositionStatus(snapshot.id)
+      const previous = await this.db.getPositionStatus(snapshot.id)
       if (previous.lastStatus === 'in_range' && snapshot.status === 'out_of_range') {
         alerts.push({ position: snapshot, from: 'in_range', to: 'out_of_range', detectedAtMs: nowMs })
       }
-      this.db.setPositionStatus(snapshot.id, snapshot.status, snapshot.outOfRangeSinceMs)
+      await this.db.setPositionStatus(snapshot.id, snapshot.status, snapshot.outOfRangeSinceMs)
       if (snapshot.currentLpValueUsdg == null) warnings.push(`Position ${snapshot.version} #${snapshot.tokenId.toString()} has no USDG price route and is excluded from complete totals.`)
       if (snapshot.accountingStatus === 'unavailable') warnings.push(`Position ${snapshot.version} #${snapshot.tokenId.toString()} accounting is unavailable: ${snapshot.accountingError ?? 'unknown reason'}`)
       positions.push(snapshot)

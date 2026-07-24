@@ -13,7 +13,7 @@ afterEach(() => {
 
 describe('ReportPublisher', () => {
   it('publishes a complete generation before deleting the previous report', async () => {
-    const db = createDatabase([storedMessage('old-portfolio', 'portfolio'), storedMessage('old-position', 'position:v4:manager:1', 'position')])
+    const db = await createDatabase([storedMessage('old-portfolio', 'portfolio'), storedMessage('old-position', 'position:v4:manager:1', 'position')])
     const mock = createChannelMock()
     const publisher = createPublisher(mock.channel, db)
 
@@ -21,12 +21,12 @@ describe('ReportPublisher', () => {
 
     expect(mock.sent.map((message) => message.id)).toEqual(['sent-1', 'sent-2', 'sent-3'])
     expect(mock.deletedIds).toEqual(['old-portfolio', 'old-position'])
-    expect(db.listDiscordReportMessages('stale')).toEqual([])
-    expect(db.listDiscordReportMessages('current').map((message) => message.messageId)).toEqual(['sent-1', 'sent-2', 'sent-3'])
+    expect(await db.listDiscordReportMessages('stale')).toEqual([])
+    expect((await db.listDiscordReportMessages('current')).map((message) => message.messageId)).toEqual(['sent-1', 'sent-2', 'sent-3'])
   })
 
   it('rolls back a partial generation and keeps the previous report current', async () => {
-    const db = createDatabase([storedMessage('old-portfolio', 'portfolio')])
+    const db = await createDatabase([storedMessage('old-portfolio', 'portfolio')])
     const mock = createChannelMock({ failSendAt: 2 })
     const publisher = createPublisher(mock.channel, db)
 
@@ -35,33 +35,33 @@ describe('ReportPublisher', () => {
     expect(mock.sent).toHaveLength(1)
     expect(mock.sent[0]?.delete).toHaveBeenCalledOnce()
     expect(mock.deletedIds).toEqual([])
-    expect(db.listDiscordReportMessages('current').map((message) => message.messageId)).toEqual(['old-portfolio'])
+    expect((await db.listDiscordReportMessages('current')).map((message) => message.messageId)).toEqual(['old-portfolio'])
   })
 
   it('retains transient delete failures and retries them on the next refresh', async () => {
-    const db = createDatabase([storedMessage('old-portfolio', 'portfolio')])
+    const db = await createDatabase([storedMessage('old-portfolio', 'portfolio')])
     const mock = createChannelMock({ transientDeleteFailures: new Set(['old-portfolio']) })
     const publisher = createPublisher(mock.channel, db)
 
     await publisher.publish(refreshResult({ positions: [] }))
-    expect(db.listDiscordReportMessages('stale').map((message) => message.messageId)).toEqual(['old-portfolio'])
+    expect((await db.listDiscordReportMessages('stale')).map((message) => message.messageId)).toEqual(['old-portfolio'])
 
     await createPublisher(mock.channel, db).publish(refreshResult({ positions: [] }))
     expect(mock.deletedIds.filter((id) => id === 'old-portfolio')).toHaveLength(2)
-    expect(db.listDiscordReportMessages('stale')).toEqual([])
+    expect(await db.listDiscordReportMessages('stale')).toEqual([])
   })
 
   it('treats an already deleted Discord message as successfully cleaned', async () => {
-    const db = createDatabase([storedMessage('missing', 'portfolio')])
+    const db = await createDatabase([storedMessage('missing', 'portfolio')])
     const mock = createChannelMock({ unknownMessageIds: new Set(['missing']) })
 
     await createPublisher(mock.channel, db).publish(refreshResult({ positions: [] }))
 
-    expect(db.listDiscordReportMessages().some((message) => message.messageId === 'missing')).toBe(false)
+    expect((await db.listDiscordReportMessages()).some((message) => message.messageId === 'missing')).toBe(false)
   })
 
   it('discovers legacy reports, removes duplicates, and preserves alerts and unrelated messages', async () => {
-    const db = createDatabase()
+    const db = await createDatabase()
     const history = new Collection<string, Message>()
     history.set('portfolio-newest', legacyMessage({ id: 'portfolio-newest', title: '📊 Uniswap LP Portfolio', createdTimestamp: 50 }))
     history.set('portfolio-duplicate', legacyMessage({ id: 'portfolio-duplicate', title: 'UNISWAP LP PORTFOLIO', createdTimestamp: 40 }))
@@ -89,11 +89,11 @@ describe('ReportPublisher', () => {
 
     expect(mock.deletedIds).toEqual(expect.arrayContaining(['portfolio-newest', 'portfolio-duplicate', 'position-old']))
     expect(mock.deletedIds).not.toEqual(expect.arrayContaining(['alert', 'other', 'other-uniswap', 'foreign']))
-    expect(db.listDiscordReportMessages('current').map((message) => message.messageId)).toEqual(['sent-1'])
+    expect((await db.listDiscordReportMessages('current')).map((message) => message.messageId)).toEqual(['sent-1'])
   })
 
   it('limits legacy discovery to 1,000 messages', async () => {
-    const db = createDatabase()
+    const db = await createDatabase()
     const pages = Array.from({ length: 10 }, (_, pageIndex) => {
       const page = new Collection<string, Message>()
       for (let index = 0; index < 100; index += 1) {
@@ -110,17 +110,17 @@ describe('ReportPublisher', () => {
   })
 
   it('continues publishing when Discord history cannot be read', async () => {
-    const db = createDatabase()
+    const db = await createDatabase()
     const mock = createChannelMock({ historyError: new Error('Missing Read Message History permission') })
 
     await expect(createPublisher(mock.channel, db).publish(refreshResult({ positions: [] }))).resolves.toBeUndefined()
 
     expect(mock.sent).toHaveLength(1)
-    expect(db.listDiscordReportMessages('current').map((message) => message.messageId)).toEqual(['sent-1'])
+    expect((await db.listDiscordReportMessages('current')).map((message) => message.messageId)).toEqual(['sent-1'])
   })
 
   it('keeps transition alerts as untracked messages', async () => {
-    const db = createDatabase()
+    const db = await createDatabase()
     const position = basePosition()
     const alert: TransitionAlert = { position, from: 'in_range', to: 'out_of_range', detectedAtMs: 100 }
     const mock = createChannelMock()
@@ -128,11 +128,11 @@ describe('ReportPublisher', () => {
     await createPublisher(mock.channel, db).publish(refreshResult({ positions: [position], alerts: [alert] }))
 
     expect(mock.sent).toHaveLength(3)
-    expect(db.listDiscordReportMessages('current').map((message) => message.messageId)).toEqual(['sent-2', 'sent-3'])
+    expect((await db.listDiscordReportMessages('current')).map((message) => message.messageId)).toEqual(['sent-2', 'sent-3'])
   })
 
   it('serializes concurrent report replacements', async () => {
-    const db = createDatabase()
+    const db = await createDatabase()
     const mock = createChannelMock()
     const publisher = createPublisher(mock.channel, db)
 
@@ -142,7 +142,7 @@ describe('ReportPublisher', () => {
     ])
 
     expect(mock.sent.map((message) => message.id)).toEqual(['sent-1', 'sent-2', 'sent-3'])
-    expect(db.listDiscordReportMessages('current').map((message) => message.messageId)).toEqual(['sent-2', 'sent-3'])
+    expect((await db.listDiscordReportMessages('current')).map((message) => message.messageId)).toEqual(['sent-2', 'sent-3'])
     expect(mock.deletedIds).toContain('sent-1')
   })
 })
@@ -151,10 +151,11 @@ function createPublisher(channel: TextChannel, db: StateDatabase) {
   return new ReportPublisher(channel, { outOfRangeEmphasisAfterMs: 15 * 60_000 }, db, { warn: vi.fn() } as any)
 }
 
-function createDatabase(messages: StoredDiscordReportMessage[] = []) {
+async function createDatabase(messages: StoredDiscordReportMessage[] = []) {
   const db = new StateDatabase(':memory:')
   databases.push(db)
-  db.seedDiscordReportMessages(messages)
+  await db.initialize()
+  await db.seedDiscordReportMessages(messages)
   return db
 }
 
