@@ -179,6 +179,18 @@ export async function buildPositionSnapshot(input: {
   const previous = await input.db.getPositionStatus(position.id)
   const outOfRangeSinceMs = status === 'out_of_range' ? previous.outOfRangeSinceMs ?? input.nowMs : undefined
   const [amount0Raw, amount1Raw] = getAmountsForLiquidity(position.sqrtPriceX96, position.currentTick, position.tickLower, position.tickUpper, position.liquidity)
+  const activeLpValueQuote = valuePairInQuote({
+    token0: position.token0,
+    token1: position.token1,
+    quoteToken,
+    currentPrice: prices.current,
+    raw0: amount0Raw,
+    raw1: amount1Raw,
+  })
+  const [marketValue0Usdg, marketValue1Usdg] = await Promise.all([
+    amount0Raw === 0n ? Promise.resolve(0) : input.oracle.valueUsdg(position.token0, amount0Raw),
+    amount1Raw === 0n ? Promise.resolve(0) : input.oracle.valueUsdg(position.token1, amount1Raw),
+  ])
   let accountingStatus = accounting.status
   let accountingError = accounting.error
   let depositedUsdg: number | null = null
@@ -196,7 +208,6 @@ export async function buildPositionSnapshot(input: {
   let netLpResultQuote: number | null = null
   let netLpResultPercent: number | null = null
   let depositedValueQuote: number | null = null
-  let activeLpValueQuote: number | null = null
   let totalResultValueQuote: number | null = null
   if (accounting.status === 'synced') {
     const cashflows = await input.db.listPositionCashflows(position.id)
@@ -220,14 +231,6 @@ export async function buildPositionSnapshot(input: {
       impermanentLossPercent = il.impermanentLossPercent
       netLpResultQuote = il.netLpResultQuote
       netLpResultPercent = il.netLpResultPercent
-      activeLpValueQuote = valuePairInQuote({
-        token0: position.token0,
-        token1: position.token1,
-        quoteToken,
-        currentPrice: prices.current,
-        raw0: amount0Raw,
-        raw1: amount1Raw,
-      })
       depositedValueQuote = await calculateDepositedValueQuote({
         cashflows,
         valueAtBlock: async (raw0, raw1, historicalBlock) => {
@@ -304,8 +307,8 @@ export async function buildPositionSnapshot(input: {
     mintTimestampMs,
     blockNumber: input.blockNumber,
     amounts: [
-      { token: position.token0, raw: amount0Raw, formatted: formatTokenAmount(amount0Raw, position.token0.decimals), valueUsdg: value0 },
-      { token: position.token1, raw: amount1Raw, formatted: formatTokenAmount(amount1Raw, position.token1.decimals), valueUsdg: value1 },
+      { token: position.token0, raw: amount0Raw, formatted: formatTokenAmount(amount0Raw, position.token0.decimals), valueUsdg: marketValue0Usdg },
+      { token: position.token1, raw: amount1Raw, formatted: formatTokenAmount(amount1Raw, position.token1.decimals), valueUsdg: marketValue1Usdg },
     ],
     currentLpValueUsdg,
     claimedFeesUsdg,

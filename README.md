@@ -14,6 +14,7 @@ The bot is read-only. It does not need a wallet private key or seed phrase.
 - Shows deposited value, current LP value, fees, total result, and profit/loss in the pair quote token.
 - Profit/loss uses the deposited-token HODL benchmark internally and therefore represents standard impermanent loss plus fees without exposing a separate IL field.
 - Non-USDG position values keep their pair quote-token amount and append a live USDG equivalent, for example `0.000426 ETH ($0.85)`.
+- LP Value includes a per-token breakdown with each token's live USDG contribution and a non-partial total.
 - Shows position age from the original mint timestamp.
 - Sends a separate red alert when a position transitions from `IN RANGE` to `OUT OF RANGE`.
 - Keeps showing out-of-range duration in regular reports after 15 minutes.

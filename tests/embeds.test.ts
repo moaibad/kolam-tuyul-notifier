@@ -111,14 +111,15 @@ describe('position embed', () => {
     expect(fieldValue(embed, 'Lower')).toBe('**0.023391 VERY-LONG-QUOTE**')
     expect(fieldValue(embed, 'Upper')).toBe('**0.040949 VERY-LONG-QUOTE**')
     expect(fieldValue(embed, 'Range Position')).toBe('`├───────●───────┤`')
-    expect(fieldValue(embed, 'MEME')).toBe('**12,450.00**')
-    expect(fieldValue(embed, 'USDG')).toBe('**1,290.25**')
-    expect(embed.fields?.findIndex((field) => field.name === '\u200b')).toBeLessThan(embed.fields?.findIndex((field) => field.name === 'Deposited') ?? 0)
+    expect(fieldValue(embed, 'MEME')).toBeUndefined()
+    expect(fieldValue(embed, 'USDG')).toBeUndefined()
+    expect(fieldValue(embed, 'LP Value')).toBe(
+      'MEME 12,450.00 ($1,551.27)\nUSDG 1,290.25 ($1,290.25)\n**Total 2,841.5200 VERY-LONG-QUOTE ($2,841.52)**',
+    )
     expect(fieldValue(embed, 'Total Fees')).toContain('**27.6200 VERY-LONG-QUOTE ($41.43)**')
     expect(fieldValue(embed, 'Total Fees')).toContain('Claimed 9.2000 VERY-LONG-QUOTE ($13.80)')
     expect(fieldValue(embed, 'Total Fees')).toContain('Unclaimed 18.4200 VERY-LONG-QUOTE ($27.63)')
     expect(fieldValue(embed, 'Deposited')).toBe('**2,000.0000 VERY-LONG-QUOTE ($3,000.00)**')
-    expect(fieldValue(embed, 'LP Value')).toBe('**2,841.5200 VERY-LONG-QUOTE ($4,262.28)**')
     expect(fieldValue(embed, 'Total Result')).toBe('**2,927.6200 VERY-LONG-QUOTE ($4,391.43)**')
     expect(fieldValue(embed, 'Profit / Loss')).toBe('**-72.3800 VERY-LONG-QUOTE (-$108.57)**\n-2.41%\n*Includes IL + fees*')
     expect(embed.fields?.map((field) => field.name)).not.toContain('Impermanent Loss')
@@ -147,6 +148,37 @@ describe('position embed', () => {
     }), 15 * 60_000, 25 * 60_000).toJSON()
 
     expect(fieldValue(embed, 'Deposited')).toContain('ETH (USDG unavailable)')
+  })
+
+  it('marks the LP USDG total unavailable when one token route is missing', () => {
+    const position = basePosition({
+      quoteToken: { address: zeroAddress, symbol: 'ETH', decimals: 18 },
+      amounts: [
+        { token: { address: zeroAddress, symbol: 'ETH', decimals: 18 }, raw: 1n, formatted: '0.0160', valueUsdg: 32.1 },
+        { token: { address: zeroAddress, symbol: 'GME', decimals: 18 }, raw: 1n, formatted: '2.0000', valueUsdg: null },
+      ],
+    })
+    const embed = buildPositionEmbed(position, 15 * 60_000, 25 * 60_000).toJSON()
+
+    expect(fieldValue(embed, 'LP Value')).toContain('GME 2.0000 (USDG unavailable)')
+    expect(fieldValue(embed, 'LP Value')).toContain('**Total 2,841.5200 ETH (USDG unavailable)**')
+  })
+
+  it('does not duplicate the LP total conversion for a USDG quote pair', () => {
+    const embed = buildPositionEmbed(basePosition(), 15 * 60_000, 25 * 60_000).toJSON()
+    expect(fieldValue(embed, 'LP Value')).toContain('**Total 2,841.52 USDG**')
+    expect(fieldValue(embed, 'LP Value')).not.toContain('Total 2,841.52 USDG ($')
+  })
+
+  it('shows a zero token amount as zero USDG', () => {
+    const position = basePosition({
+      amounts: [
+        { token: { address: zeroAddress, symbol: 'MEME', decimals: 18 }, raw: 0n, formatted: '0.0000', valueUsdg: 0 },
+        { token: { address: zeroAddress, symbol: 'USDG', decimals: 18 }, raw: 1n, formatted: '1.0000', valueUsdg: 1 },
+      ],
+    })
+    const embed = buildPositionEmbed(position, 15 * 60_000, 25 * 60_000).toJSON()
+    expect(fieldValue(embed, 'LP Value')).toContain('MEME 0.0000 ($0.00)')
   })
 
   it('shows positive signs consistently for quote and USDG profit', () => {
@@ -200,6 +232,7 @@ describe('position embed', () => {
 
     expect(embed.color).toBe(0x5865f2)
     expect(fieldValue(embed, 'Deposited')).toBe(`**${label}**`)
+    expect(fieldValue(embed, 'LP Value')).toContain('MEME 12,450.00 ($1,551.27)')
     expect(fieldValue(embed, 'Total Fees')).toBe(`**${label}**`)
     expect(fieldValue(embed, 'Profit / Loss')).toContain(label)
     expect(fieldValue(embed, '⚠️ Accounting')).toContain(notice)

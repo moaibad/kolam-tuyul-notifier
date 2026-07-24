@@ -64,9 +64,8 @@ export function buildPositionEmbed(position: PositionSnapshot, outOfRangeEmphasi
       priceMetric('Lower', position.lowerPrice, position.quoteToken.symbol),
       priceMetric('Upper', position.upperPrice, position.quoteToken.symbol),
       { name: 'Range Position', value: getRangeMarker(position) },
-      ...getAssetFields(position),
       metric('Deposited', quoteAccountingValue(position, position.depositedValueQuote)),
-      metric('LP Value', quoteAccountingValue(position, position.activeLpValueQuote)),
+      lpValueMetric(position),
       {
         name: 'Total Fees',
         value: position.accountingStatus === 'synced'
@@ -121,11 +120,25 @@ function priceMetric(name: string, value: number, quoteSymbol: string) {
   return metric(name, `${formatPrice(value)} ${quoteSymbol}`)
 }
 
-function getAssetFields(position: PositionSnapshot) {
-  if (position.amounts.length === 0) return [{ name: 'Current Assets', value: '*Unavailable*' }]
-  const fields = position.amounts.map((amount) => metric(amount.token.symbol, amount.formatted))
-  while (fields.length % 3 !== 0) fields.push({ name: '\u200b', value: '\u200b', inline: true })
-  return fields
+function lpValueMetric(position: PositionSnapshot) {
+  const tokenLines = position.amounts.map((amount) => {
+    const usdg = amount.valueUsdg == null ? 'USDG unavailable' : formatDollar(amount.valueUsdg)
+    return `${amount.token.symbol} ${amount.formatted} (${usdg})`
+  })
+  const totalUsdg = position.amounts.length > 0 && position.amounts.every((amount) => amount.valueUsdg != null)
+    ? position.amounts.reduce((total, amount) => total + (amount.valueUsdg ?? 0), 0)
+    : null
+  const totalPrimary = position.activeLpValueQuote == null
+    ? 'Unavailable'
+    : formatQuotePrimary(position.activeLpValueQuote, position.quoteToken.symbol)
+  const total = position.quoteToken.symbol.toUpperCase() === 'USDG'
+    ? totalPrimary
+    : `${totalPrimary} (${totalUsdg == null ? 'USDG unavailable' : formatDollar(totalUsdg)})`
+  return {
+    name: 'LP Value',
+    value: [...tokenLines, `**Total ${total}**`].join('\n'),
+    inline: true,
+  }
 }
 
 function trimText(value: string, maxLength: number) {
@@ -170,15 +183,22 @@ function quoteAccountingValue(position: PositionSnapshot, value: number | null) 
 
 function formatQuoteValue(value: number | null, position: Pick<PositionSnapshot, 'quoteToken' | 'quoteTokenPriceUsdg'>, signed = false) {
   if (value == null) return 'Unavailable'
+  const primary = formatQuotePrimary(value, position.quoteToken.symbol, signed)
   const symbol = position.quoteToken.symbol
-  const digits = symbol.toUpperCase() === 'USDG' ? 2 : value !== 0 && Math.abs(value) < 0.01 ? 6 : 4
-  const sign = signed && value > 0 ? '+' : ''
-  const primary = `${sign}${formatNumber(value, digits)} ${symbol}`
   if (symbol.toUpperCase() === 'USDG') return primary
   if (position.quoteTokenPriceUsdg == null) return `${primary} (USDG unavailable)`
-  const usdgValue = value * position.quoteTokenPriceUsdg
-  const usdgSign = usdgValue < 0 ? '-' : signed && usdgValue > 0 ? '+' : ''
-  return `${primary} (${usdgSign}$${formatNumber(Math.abs(usdgValue), 2)})`
+  return `${primary} (${formatDollar(value * position.quoteTokenPriceUsdg, signed)})`
+}
+
+function formatQuotePrimary(value: number, symbol: string, signed = false) {
+  const digits = symbol.toUpperCase() === 'USDG' ? 2 : value !== 0 && Math.abs(value) < 0.01 ? 6 : 4
+  const sign = signed && value > 0 ? '+' : ''
+  return `${sign}${formatNumber(value, digits)} ${symbol}`
+}
+
+function formatDollar(value: number, signed = false) {
+  const sign = value < 0 ? '-' : signed && value > 0 ? '+' : ''
+  return `${sign}$${formatNumber(Math.abs(value), 2)}`
 }
 
 function formatQuoteResult(value: number | null, percent: number | null, position: Pick<PositionSnapshot, 'quoteToken' | 'quoteTokenPriceUsdg'>) {
