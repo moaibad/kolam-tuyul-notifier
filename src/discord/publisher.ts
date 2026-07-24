@@ -169,7 +169,8 @@ function classifyLegacyReport(message: Message, botUserId?: string): LegacyRepor
   const version = embed.description?.match(/Uniswap (v3|v4)/)?.[1]
   const fieldNames = new Set(embed.fields.map((field) => field.name))
   const isLegacyPositionReport = ['STATUS', 'PRICE RANGE', 'CURRENT ASSETS', 'PERFORMANCE', 'PROFIT / LOSS', 'POSITION DETAILS'].every((name) => fieldNames.has(name))
-  const isCurrentPositionReport = ['Status', 'Current Price', 'Lower', 'Upper', 'Total Result', 'Profit / Loss'].every((name) => fieldNames.has(name))
+  const isCurrentPositionReport = ['Status', 'Current Price', 'Lower', 'Upper'].every((name) => fieldNames.has(name)) &&
+    (fieldNames.has('Profit / Loss') || fieldNames.has('Impermanent Loss'))
   if (!isLegacyPositionReport && !isCurrentPositionReport) return undefined
   const searchableText = [embed.description ?? '', ...embed.fields.map((field) => field.value)].join('\n')
   const tokenId = searchableText.match(/#(\d+)/)?.[1]

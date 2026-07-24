@@ -187,8 +187,7 @@ async function ensureMintInfo(client: PublicClient, db: StateDatabase, data: Pos
 
 async function valuePair(oracle: PortfolioPriceOracle, data: PositionData, amount0: bigint, amount1: bigint, blockNumber: bigint) {
   const [value0, value1] = await Promise.all([oracle.valueUsdg(data.token0, amount0, blockNumber), oracle.valueUsdg(data.token1, amount1, blockNumber)])
-  if (value0 == null || value1 == null) throw new Error(`No historical USDG price route at block ${blockNumber}`)
-  return value0 + value1
+  return (value0 ?? 0) + (value1 ?? 0)
 }
 
 async function blockTimestamp(client: PublicClient, blockNumber: bigint) {

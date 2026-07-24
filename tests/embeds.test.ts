@@ -99,6 +99,7 @@ describe('position embed', () => {
       lowerPrice: 0.023391,
       upperPrice: 0.040949,
       quoteToken: { address: zeroAddress, symbol: 'VERY-LONG-QUOTE', decimals: 18 },
+      quoteTokenPriceUsdg: 1.5,
     })
     const embed = buildPositionEmbed(position, 15 * 60_000, 25 * 60_000).toJSON()
 
@@ -113,10 +114,15 @@ describe('position embed', () => {
     expect(fieldValue(embed, 'MEME')).toBe('**12,450.00**')
     expect(fieldValue(embed, 'USDG')).toBe('**1,290.25**')
     expect(embed.fields?.findIndex((field) => field.name === '\u200b')).toBeLessThan(embed.fields?.findIndex((field) => field.name === 'Deposited') ?? 0)
-    expect(fieldValue(embed, 'Total Fees')).toContain('**27.62 USDG**')
-    expect(fieldValue(embed, 'Total Fees')).toContain('Claimed 9.20 USDG')
-    expect(fieldValue(embed, 'Total Fees')).toContain('Unclaimed 18.42 USDG')
-    expect(fieldValue(embed, 'Profit / Loss')).toBe('**+869.14 USDG**\n+43.46%')
+    expect(fieldValue(embed, 'Total Fees')).toContain('**27.6200 VERY-LONG-QUOTE ($41.43)**')
+    expect(fieldValue(embed, 'Total Fees')).toContain('Claimed 9.2000 VERY-LONG-QUOTE ($13.80)')
+    expect(fieldValue(embed, 'Total Fees')).toContain('Unclaimed 18.4200 VERY-LONG-QUOTE ($27.63)')
+    expect(fieldValue(embed, 'Deposited')).toBe('**2,000.0000 VERY-LONG-QUOTE ($3,000.00)**')
+    expect(fieldValue(embed, 'LP Value')).toBe('**2,841.5200 VERY-LONG-QUOTE ($4,262.28)**')
+    expect(fieldValue(embed, 'Total Result')).toBe('**2,927.6200 VERY-LONG-QUOTE ($4,391.43)**')
+    expect(fieldValue(embed, 'Profit / Loss')).toBe('**-72.3800 VERY-LONG-QUOTE (-$108.57)**\n-2.41%\n*Includes IL + fees*')
+    expect(embed.fields?.map((field) => field.name)).not.toContain('Impermanent Loss')
+    expect(embed.fields?.map((field) => field.name)).not.toContain('HODL Value')
     expect(embed.footer?.text).toBe('Age 25 minutes · Block 38,291,407')
     expect(JSON.stringify(embed)).not.toContain('```')
     expect(JSON.stringify(embed)).not.toContain('…')
@@ -132,6 +138,26 @@ describe('position embed', () => {
     expect(embed.color).toBe(0xf59e0b)
     expect(embed.title).toBe('🟠 MEME / USDG')
     expect(fieldValue(embed, 'Status')).toContain('OUT OF RANGE FOR 25 MINUTES')
+  })
+
+  it('keeps quote values available when the USDG conversion route is missing', () => {
+    const embed = buildPositionEmbed(basePosition({
+      quoteToken: { address: zeroAddress, symbol: 'ETH', decimals: 18 },
+      quoteTokenPriceUsdg: null,
+    }), 15 * 60_000, 25 * 60_000).toJSON()
+
+    expect(fieldValue(embed, 'Deposited')).toContain('ETH (USDG unavailable)')
+  })
+
+  it('shows positive signs consistently for quote and USDG profit', () => {
+    const embed = buildPositionEmbed(basePosition({
+      quoteToken: { address: zeroAddress, symbol: 'ETH', decimals: 18 },
+      quoteTokenPriceUsdg: 2_000,
+      netLpResultQuote: 0.001,
+      netLpResultPercent: 2,
+    }), 15 * 60_000, 25 * 60_000).toJSON()
+
+    expect(fieldValue(embed, 'Profit / Loss')).toContain('+0.001000 ETH (+$2.00)')
   })
 
   it.each([
@@ -260,6 +286,7 @@ function basePosition(overrides: Partial<PositionSnapshot> = {}): PositionSnapsh
     token0: { address: zeroAddress, symbol: 'MEME', decimals: 18 },
     token1: { address: zeroAddress, symbol: 'USDG', decimals: 18 },
     quoteToken: { address: zeroAddress, symbol: 'USDG', decimals: 18 },
+    quoteTokenPriceUsdg: 1,
     feeTier: 3000,
     tickLower: 0,
     tickUpper: 10,
@@ -283,6 +310,17 @@ function basePosition(overrides: Partial<PositionSnapshot> = {}): PositionSnapsh
     totalResultUsdg: 2869.14,
     profitLossUsdg: 869.14,
     profitLossPercent: 43.46,
+    hodlValueQuote: 3000,
+    lpPrincipalValueQuote: 2900,
+    claimedFeesValueQuote: 9.2,
+    unclaimedFeesValueQuote: 18.42,
+    impermanentLossQuote: -100,
+    impermanentLossPercent: -3.3333,
+    netLpResultQuote: -72.38,
+    netLpResultPercent: -2.4127,
+    depositedValueQuote: 2000,
+    activeLpValueQuote: 2841.52,
+    totalResultValueQuote: 2927.62,
     accountingStatus: 'synced',
     uniswapUrl: 'https://app.uniswap.org',
     explorerUrl: 'https://example.com',

@@ -18,6 +18,7 @@ import { PortfolioPriceOracle, quotePrices, selectQuoteToken, type PoolPriceSour
 import { formatTokenAmount, getRangeStatus } from './valuation.js'
 import { getSqrtRatioAtTick } from './tick-math.js'
 import { calculateEntryValuation, valueRawAtEntryPrice } from './entry-valuation.js'
+import { calculateDepositedValueQuote, calculateImpermanentLoss, valuePairInQuote } from './impermanent-loss.js'
 
 const Q128 = 2n ** 128n
 const UINT256 = 2n ** 256n
@@ -172,6 +173,7 @@ export async function buildPositionSnapshot(input: {
   const mintTimestampMs = stored?.mintTimestampMs ?? input.nowMs
   const accounting = await input.db.getAccounting(position.id)
   const quoteToken = selectQuoteToken(position.token0, position.token1, input.oracle.usdgAddress)
+  const quoteTokenPriceUsdg = await input.oracle.tokenPriceUsdg(quoteToken)
   const prices = quotePrices({ ...position, quoteToken })
   const status = getRangeStatus(position.currentTick, position.tickLower, position.tickUpper)
   const previous = await input.db.getPositionStatus(position.id)
@@ -185,12 +187,76 @@ export async function buildPositionSnapshot(input: {
   let value0: number | null = null
   let value1: number | null = null
   let unclaimedFeesUsdg: number | null = null
+  let hodlValueQuote: number | null = null
+  let lpPrincipalValueQuote: number | null = null
+  let claimedFeesValueQuote: number | null = null
+  let unclaimedFeesValueQuote: number | null = null
+  let impermanentLossQuote: number | null = null
+  let impermanentLossPercent: number | null = null
+  let netLpResultQuote: number | null = null
+  let netLpResultPercent: number | null = null
+  let depositedValueQuote: number | null = null
+  let activeLpValueQuote: number | null = null
+  let totalResultValueQuote: number | null = null
   if (accounting.status === 'synced') {
+    const cashflows = await input.db.listPositionCashflows(position.id)
+    try {
+      const il = calculateImpermanentLoss({
+        token0: position.token0,
+        token1: position.token1,
+        quoteToken,
+        currentPrice: prices.current,
+        current0Raw: amount0Raw,
+        current1Raw: amount1Raw,
+        unclaimed0Raw: position.unclaimed0,
+        unclaimed1Raw: position.unclaimed1,
+        cashflows,
+      })
+      hodlValueQuote = il.hodlValueQuote
+      lpPrincipalValueQuote = il.lpPrincipalValueQuote
+      claimedFeesValueQuote = il.claimedFeesValueQuote
+      unclaimedFeesValueQuote = il.unclaimedFeesValueQuote
+      impermanentLossQuote = il.impermanentLossQuote
+      impermanentLossPercent = il.impermanentLossPercent
+      netLpResultQuote = il.netLpResultQuote
+      netLpResultPercent = il.netLpResultPercent
+      activeLpValueQuote = valuePairInQuote({
+        token0: position.token0,
+        token1: position.token1,
+        quoteToken,
+        currentPrice: prices.current,
+        raw0: amount0Raw,
+        raw1: amount1Raw,
+      })
+      depositedValueQuote = await calculateDepositedValueQuote({
+        cashflows,
+        valueAtBlock: async (raw0, raw1, historicalBlock) => {
+          const historicalTick = await position.priceSource.readTickAt(historicalBlock)
+          const historicalPrice = quotePrices({
+            ...position,
+            quoteToken,
+            currentTick: historicalTick,
+          }).current
+          return valuePairInQuote({
+            token0: position.token0,
+            token1: position.token1,
+            quoteToken,
+            currentPrice: historicalPrice,
+            raw0,
+            raw1,
+          })
+        },
+      })
+      totalResultValueQuote = il.lpPrincipalValueQuote + il.claimedFeesValueQuote + il.unclaimedFeesValueQuote
+    } catch (error) {
+      accountingStatus = 'unavailable'
+      accountingError = error instanceof Error ? error.message : String(error)
+    }
     try {
       const entry = await calculateEntryValuation({
         token0: position.token0,
         token1: position.token1,
-        cashflows: await input.db.listPositionCashflows(position.id),
+        cashflows,
         priceAt: (token, historicalBlock) => input.oracle.tokenPriceUsdg(token, historicalBlock),
       })
       depositedUsdg = entry.depositedUsdg
@@ -201,9 +267,8 @@ export async function buildPositionSnapshot(input: {
       unclaimedFeesUsdg =
         valueRawAtEntryPrice(position.unclaimed0, position.token0, entry.basis.token0PriceUsdg) +
         valueRawAtEntryPrice(position.unclaimed1, position.token1, entry.basis.token1PriceUsdg)
-    } catch (error) {
-      accountingStatus = 'unavailable'
-      accountingError = error instanceof Error ? error.message : String(error)
+    } catch {
+      // Legacy USDG portfolio totals may be unavailable without affecting pair-native IL.
     }
   }
   const currentLpValueUsdg = addNullable(value0, value1)
@@ -224,6 +289,7 @@ export async function buildPositionSnapshot(input: {
     token0: position.token0,
     token1: position.token1,
     quoteToken,
+    quoteTokenPriceUsdg,
     feeTier: position.feeTier,
     feeLabel: position.feeLabel,
     tickLower: position.tickLower,
@@ -249,6 +315,17 @@ export async function buildPositionSnapshot(input: {
     totalResultUsdg: result.totalResultUsdg,
     profitLossUsdg: result.profitLossUsdg,
     profitLossPercent: result.profitLossPercent,
+    hodlValueQuote,
+    lpPrincipalValueQuote,
+    claimedFeesValueQuote,
+    unclaimedFeesValueQuote,
+    impermanentLossQuote,
+    impermanentLossPercent,
+    netLpResultQuote,
+    netLpResultPercent,
+    depositedValueQuote,
+    activeLpValueQuote,
+    totalResultValueQuote,
     accountingStatus,
     accountingError,
     uniswapUrl: `https://app.uniswap.org/portfolio/${input.walletAddress}`,

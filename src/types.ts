@@ -26,6 +26,7 @@ export interface PositionSnapshot {
   token0: TokenInfo
   token1: TokenInfo
   quoteToken: TokenInfo
+  quoteTokenPriceUsdg: number | null
   feeLabel?: string
   feeTier: number
   tickLower: number
@@ -48,6 +49,17 @@ export interface PositionSnapshot {
   totalResultUsdg: number | null
   profitLossUsdg: number | null
   profitLossPercent: number | null
+  hodlValueQuote: number | null
+  lpPrincipalValueQuote: number | null
+  claimedFeesValueQuote: number | null
+  unclaimedFeesValueQuote: number | null
+  impermanentLossQuote: number | null
+  impermanentLossPercent: number | null
+  netLpResultQuote: number | null
+  netLpResultPercent: number | null
+  depositedValueQuote: number | null
+  activeLpValueQuote: number | null
+  totalResultValueQuote: number | null
   accountingStatus: AccountingStatus
   accountingError?: string
   uniswapUrl: string

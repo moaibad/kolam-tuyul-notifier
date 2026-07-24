@@ -48,7 +48,7 @@ export function buildPortfolioEmbed(portfolio: PortfolioSnapshot) {
 
 export function buildPositionEmbed(position: PositionSnapshot, outOfRangeEmphasisAfterMs: number, nowMs = Date.now()) {
   const isOut = position.status === 'out_of_range'
-  const totalFees = feesTotal(position.claimedFeesUsdg, position.unclaimedFeesUsdg)
+  const totalFeesQuote = addNullable(position.claimedFeesValueQuote, position.unclaimedFeesValueQuote)
   const accountingNotice = getAccountingNotice(position)
 
   return new EmbedBuilder()
@@ -65,20 +65,20 @@ export function buildPositionEmbed(position: PositionSnapshot, outOfRangeEmphasi
       priceMetric('Upper', position.upperPrice, position.quoteToken.symbol),
       { name: 'Range Position', value: getRangeMarker(position) },
       ...getAssetFields(position),
-      metric('Deposited', accountingValue(position, position.depositedUsdg)),
-      metric('LP Value', formatMaybeUsdg(position.currentLpValueUsdg)),
+      metric('Deposited', quoteAccountingValue(position, position.depositedValueQuote)),
+      metric('LP Value', quoteAccountingValue(position, position.activeLpValueQuote)),
       {
         name: 'Total Fees',
         value: position.accountingStatus === 'synced'
-          ? `**${formatMaybeUsdg(totalFees)}**\nClaimed ${formatMaybeUsdg(position.claimedFeesUsdg)}\nUnclaimed ${formatMaybeUsdg(position.unclaimedFeesUsdg)}`
-          : `**${accountingValue(position, totalFees)}**`,
+          ? `**${formatQuoteValue(totalFeesQuote, position)}**\nClaimed ${formatQuoteValue(position.claimedFeesValueQuote, position)}\nUnclaimed ${formatQuoteValue(position.unclaimedFeesValueQuote, position)}`
+          : `**${quoteAccountingValue(position, totalFeesQuote)}**`,
         inline: true,
       },
-      metric('Total Result', accountingValue(position, position.totalResultUsdg)),
+      metric('Total Result', quoteAccountingValue(position, position.totalResultValueQuote)),
       {
         name: 'Profit / Loss',
         value: position.accountingStatus === 'synced'
-          ? formatProfitLoss(position.profitLossUsdg, position.profitLossPercent)
+          ? `${formatQuoteResult(position.netLpResultQuote, position.netLpResultPercent, position)}\n*Includes IL + fees*`
           : `*${position.accountingStatus === 'unavailable' ? 'Unavailable' : 'Synchronizing'}*`,
         inline: true,
       },
@@ -162,10 +162,33 @@ function formatPrice(value: number) {
   return formatNumber(value, 6).replace(/0+$/, '').replace(/\.$/, '')
 }
 
-function accountingValue(position: PositionSnapshot, value: number | null) {
+function quoteAccountingValue(position: PositionSnapshot, value: number | null) {
   if (position.accountingStatus === 'unavailable') return 'Unavailable'
   if (position.accountingStatus === 'syncing') return 'Synchronizing'
-  return formatMaybeUsdg(value)
+  return formatQuoteValue(value, position)
+}
+
+function formatQuoteValue(value: number | null, position: Pick<PositionSnapshot, 'quoteToken' | 'quoteTokenPriceUsdg'>, signed = false) {
+  if (value == null) return 'Unavailable'
+  const symbol = position.quoteToken.symbol
+  const digits = symbol.toUpperCase() === 'USDG' ? 2 : value !== 0 && Math.abs(value) < 0.01 ? 6 : 4
+  const sign = signed && value > 0 ? '+' : ''
+  const primary = `${sign}${formatNumber(value, digits)} ${symbol}`
+  if (symbol.toUpperCase() === 'USDG') return primary
+  if (position.quoteTokenPriceUsdg == null) return `${primary} (USDG unavailable)`
+  const usdgValue = value * position.quoteTokenPriceUsdg
+  const usdgSign = usdgValue < 0 ? '-' : signed && usdgValue > 0 ? '+' : ''
+  return `${primary} (${usdgSign}$${formatNumber(Math.abs(usdgValue), 2)})`
+}
+
+function formatQuoteResult(value: number | null, percent: number | null, position: Pick<PositionSnapshot, 'quoteToken' | 'quoteTokenPriceUsdg'>) {
+  if (value == null || percent == null) return '*Unavailable*'
+  const percentSign = percent > 0 ? '+' : ''
+  return `**${formatQuoteValue(value, position, true)}**\n${percentSign}${formatNumber(percent, 2)}%`
+}
+
+function addNullable(left: number | null | undefined, right: number | null | undefined) {
+  return left == null || right == null ? null : left + right
 }
 
 function getAccountingNotice(position: PositionSnapshot) {
