@@ -65,21 +65,21 @@ export function buildPositionEmbed(position: PositionSnapshot, outOfRangeEmphasi
       priceMetric('Upper', position.upperPrice, position.quoteToken.symbol),
       { name: 'Range Position', value: getRangeMarker(position) },
       metric('Deposited', quoteAccountingValue(position, position.depositedValueQuote)),
+      metric('Total Result', quoteAccountingValue(position, position.totalResultValueQuote)),
       lpValueMetric(position),
       {
-        name: 'Total Fees',
+        name: 'Fees',
         value: position.accountingStatus === 'synced'
-          ? `**${formatQuoteValue(totalFeesQuote, position)}**\nClaimed ${formatQuoteValue(position.claimedFeesValueQuote, position)}\nUnclaimed ${formatQuoteValue(position.unclaimedFeesValueQuote, position)}`
+          ? `Claimed: ${formatQuoteValue(position.claimedFeesValueQuote, position)}\nUnclaimed: ${formatQuoteValue(position.unclaimedFeesValueQuote, position)}\n**Total: ${formatQuoteValue(totalFeesQuote, position)}**`
           : `**${quoteAccountingValue(position, totalFeesQuote)}**`,
-        inline: true,
+        inline: false,
       },
-      metric('Total Result', quoteAccountingValue(position, position.totalResultValueQuote)),
       {
         name: 'Profit / Loss',
         value: position.accountingStatus === 'synced'
           ? `${formatQuoteResult(position.netLpResultQuote, position.netLpResultPercent, position)}\n*Includes IL + fees*`
           : `*${position.accountingStatus === 'unavailable' ? 'Unavailable' : 'Synchronizing'}*`,
-        inline: true,
+        inline: false,
       },
       ...(accountingNotice ? [{ name: '⚠️ Accounting', value: accountingNotice }] : []),
     )
@@ -123,7 +123,7 @@ function priceMetric(name: string, value: number, quoteSymbol: string) {
 function lpValueMetric(position: PositionSnapshot) {
   const tokenLines = position.amounts.map((amount) => {
     const usdg = amount.valueUsdg == null ? 'USDG unavailable' : formatDollar(amount.valueUsdg)
-    return `${amount.token.symbol} ${amount.formatted} (${usdg})`
+    return `${amount.token.symbol}: ${amount.formatted} (${usdg})`
   })
   const totalUsdg = position.amounts.length > 0 && position.amounts.every((amount) => amount.valueUsdg != null)
     ? position.amounts.reduce((total, amount) => total + (amount.valueUsdg ?? 0), 0)
@@ -135,9 +135,9 @@ function lpValueMetric(position: PositionSnapshot) {
     ? totalPrimary
     : `${totalPrimary} (${totalUsdg == null ? 'USDG unavailable' : formatDollar(totalUsdg)})`
   return {
-    name: 'LP Value',
-    value: [...tokenLines, `**Total ${total}**`].join('\n'),
-    inline: true,
+    name: 'LP Composition',
+    value: [...tokenLines, `**Total: ${total}**`].join('\n'),
+    inline: false,
   }
 }
 
@@ -171,8 +171,16 @@ function getRangeMarker(position: Pick<PositionSnapshot, 'currentTick' | 'tickLo
 }
 
 function formatPrice(value: number) {
+  if (value === 0) return '0'
   if (Math.abs(value) >= 1) return formatNumber(value, 3)
-  return formatNumber(value, 6).replace(/0+$/, '').replace(/\.$/, '')
+  const absolute = Math.abs(value)
+  if (absolute >= 0.000001) return trimDecimal(formatNumber(value, 6))
+  const leadingZeroes = Math.max(0, Math.floor(-Math.log10(absolute)))
+  return trimDecimal(formatNumber(value, Math.min(18, leadingZeroes + 4)))
+}
+
+function trimDecimal(value: string) {
+  return value.replace(/0+$/, '').replace(/\.$/, '')
 }
 
 function quoteAccountingValue(position: PositionSnapshot, value: number | null) {
