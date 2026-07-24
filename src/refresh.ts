@@ -7,6 +7,8 @@ import { calculatePortfolioTotals } from './uniswap/accounting.js'
 import { discoverOpenPositions } from './uniswap/discovery.js'
 import { buildPositionSnapshot, createPriceOracle, loadPositionData } from './uniswap/positions.js'
 import { syncPositionAccounting } from './uniswap/accounting-sync.js'
+import { discoverReferencePriceSources } from './uniswap/reference-pools.js'
+import type { PoolPriceSource } from './uniswap/price-oracle.js'
 
 export class RefreshService {
   private running?: Promise<RefreshResult>
@@ -44,7 +46,24 @@ export class RefreshService {
       }
     }
 
-    const oracle = createPriceOracle(positionData, this.config.usdgAddress)
+    let referenceSources: PoolPriceSource[] = []
+    try {
+      referenceSources = await discoverReferencePriceSources({
+        client: this.client,
+        db: this.db,
+        deployments: this.deployments,
+        positions: positionData,
+        usdgAddress: this.config.usdgAddress,
+        wethAddress: this.config.wethAddress,
+        intermediateTokens: this.config.priceRouteIntermediateTokens,
+        blockNumber,
+        cacheMs: this.config.pricePoolCacheMs,
+        nowMs,
+      })
+    } catch (error) {
+      warnings.push(`Reference price pool discovery failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    const oracle = createPriceOracle(positionData, this.config.usdgAddress, referenceSources, this.config.wethAddress)
     for (const data of positionData.filter((position) => position.liquidity > 0n)) {
       await syncPositionAccounting({ client: this.client, db: this.db, data, oracle, deployments: this.deployments, blockNumber })
       const snapshot = await buildPositionSnapshot({ client: this.client, db: this.db, data, oracle, walletAddress: this.config.walletAddress, blockNumber, nowMs })

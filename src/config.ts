@@ -5,6 +5,7 @@ import { getAddress } from 'viem'
 import { z } from 'zod'
 
 const ROBINHOOD_USDG_ADDRESS = getAddress('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168')
+const ROBINHOOD_WETH_ADDRESS = getAddress('0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73')
 
 const addressSchema = z
   .string()
@@ -23,6 +24,8 @@ const envSchema = z.object({
   OUT_OF_RANGE_EMPHASIS_AFTER_MINUTES: z.coerce.number().int().positive().default(15),
   STATE_DATABASE_PATH: z.string().min(1).default('./data/notifier.sqlite'),
   LOG_LEVEL: z.string().default('info'),
+  PRICE_POOL_CACHE_MINUTES: z.coerce.number().int().positive().default(60),
+  PRICE_ROUTE_INTERMEDIATE_TOKENS: z.string().default(''),
 })
 
 export type AppConfig = ReturnType<typeof loadConfig>
@@ -42,6 +45,12 @@ export function loadConfig() {
     walletAddress: parsed.WALLET_ADDRESS,
     robinhoodRpcUrl: parsed.ROBINHOOD_RPC_URL,
     usdgAddress: ROBINHOOD_USDG_ADDRESS,
+    wethAddress: ROBINHOOD_WETH_ADDRESS,
+    pricePoolCacheMs: parsed.PRICE_POOL_CACHE_MINUTES * 60_000,
+    priceRouteIntermediateTokens: [
+      ROBINHOOD_WETH_ADDRESS,
+      ...parsed.PRICE_ROUTE_INTERMEDIATE_TOKENS.split(',').map((value) => value.trim()).filter(Boolean).map((value) => addressSchema.parse(value)),
+    ],
     reportIntervalMs: parsed.REPORT_INTERVAL_MINUTES * 60_000,
     manualRefreshCooldownMs: parsed.MANUAL_REFRESH_COOLDOWN_SECONDS * 1_000,
     outOfRangeEmphasisAfterMs: parsed.OUT_OF_RANGE_EMPHASIS_AFTER_MINUTES * 60_000,

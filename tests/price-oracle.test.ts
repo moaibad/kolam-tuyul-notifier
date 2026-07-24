@@ -5,6 +5,8 @@ import { PortfolioPriceOracle, quotePrices, selectQuoteToken, type PoolPriceSour
 const USDG = token('0x0000000000000000000000000000000000000001', 'USDG', 6)
 const PONS = token('0x0000000000000000000000000000000000000002', 'PONS', 18)
 const WETH = token('0x0000000000000000000000000000000000000003', 'WETH', 18)
+const ETH = token('0x0000000000000000000000000000000000000000', 'ETH', 18)
+const GME = token('0x0000000000000000000000000000000000000004', 'GME', 18)
 
 describe('portfolio price oracle', () => {
   it('uses a direct USDG pool', async () => {
@@ -20,6 +22,25 @@ describe('portfolio price oracle', () => {
   it('returns null rather than a fabricated zero when no route exists', async () => {
     const oracle = new PortfolioPriceOracle([], USDG.address)
     expect(await oracle.tokenPriceUsdg(PONS)).toBeNull()
+  })
+
+  it('treats native ETH and WETH as the same routing asset', async () => {
+    const oracle = new PortfolioPriceOracle([source('weth-usdg', WETH, USDG, -200_000)], USDG.address, WETH.address)
+    expect(await oracle.tokenPriceUsdg(ETH)).not.toBeNull()
+  })
+
+  it('values GME through a held GME/ETH pool and an external WETH/USDG pool', async () => {
+    const oracle = new PortfolioPriceOracle([
+      source('gme-eth', ETH, GME, 0),
+      source('weth-usdg', WETH, USDG, -200_000),
+    ], USDG.address, WETH.address)
+    expect(await oracle.tokenPriceUsdg(GME)).not.toBeNull()
+  })
+
+  it('ignores pools with zero liquidity', async () => {
+    const empty = { ...source('empty', WETH, USDG, -200_000), liquidity: 0n }
+    const oracle = new PortfolioPriceOracle([empty], USDG.address, WETH.address)
+    expect(await oracle.tokenPriceUsdg(WETH)).toBeNull()
   })
 
   it('quotes a non-USDG WETH pair in WETH', () => {

@@ -72,6 +72,7 @@ async function loadV3Position(input: PositionInput): Promise<PositionData> {
     token0,
     token1,
     currentTick: slot0[1],
+    liquidity: await input.client.readContract({ address: poolAddress, abi: v3PoolAbi, functionName: 'liquidity' }),
     readTickAt: async (blockNumber) => {
       const historical = await input.client.readContract({ address: poolAddress, abi: v3PoolAbi, functionName: 'slot0', blockNumber })
       return historical[1]
@@ -129,6 +130,7 @@ async function loadV4Position(input: PositionInput): Promise<PositionData> {
     token0,
     token1,
     currentTick: slot0[1],
+    liquidity,
     readTickAt: async (blockNumber) => {
       const historical = await input.client.readContract({ address: input.deployments.v4StateView!, abi: v4StateViewAbi, functionName: 'getSlot0', args: [poolId], blockNumber })
       return historical[1]
@@ -231,11 +233,11 @@ export async function buildPositionSnapshot(input: {
   }
 }
 
-export function createPriceOracle(data: PositionData[], usdgAddress: Address) {
-  return new PortfolioPriceOracle(data.map((position) => position.priceSource), usdgAddress)
+export function createPriceOracle(data: PositionData[], usdgAddress: Address, additionalSources: PoolPriceSource[] = [], wethAddress?: Address) {
+  return new PortfolioPriceOracle([...data.map((position) => position.priceSource), ...additionalSources], usdgAddress, wethAddress)
 }
 
-async function getTokenInfo(client: PublicClient, db: StateDatabase, address: Address): Promise<TokenInfo> {
+export async function getTokenInfo(client: PublicClient, db: StateDatabase, address: Address): Promise<TokenInfo> {
   if (address === zeroAddress) return nativeEth
   const cached = await db.getToken(address)
   if (cached) return { address, ...cached }

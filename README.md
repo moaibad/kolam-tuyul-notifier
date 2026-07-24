@@ -65,4 +65,6 @@ npm run lint
 - The bundled v3 and v4 deployment metadata follows the official Uniswap deployment documentation for Robinhood Chain.
 - Profit/loss is shown only after position accounting history is synchronized. Unsupported hook accounting or unavailable historical RPC state is displayed as `Unavailable`, never as a fabricated zero.
 - Position valuation prefers a direct USDG pool and can route through one intermediate token using discovered v3/v4 pools. Positions without a safe route remain visible but make portfolio totals partial.
+- Reference-price discovery automatically searches liquid Uniswap v3 pools for the active position tokens, USDG, and trusted intermediate tokens. Native ETH and canonical WETH are treated as the same routing asset.
+- `PRICE_POOL_CACHE_MINUTES` controls how often reference pools are refreshed (default: 60). `PRICE_ROUTE_INTERMEDIATE_TOKENS` may contain additional comma-separated token addresses. A real liquid on-chain route is always required; the bot never fabricates a token price.
 - Full historical accounting requires an RPC that supports historical `eth_call`. The public Robinhood endpoint currently works for recent history; Alchemy is recommended for production reliability.

@@ -7,6 +7,7 @@ export interface PoolPriceSource {
   token0: TokenInfo
   token1: TokenInfo
   currentTick: number
+  liquidity?: bigint
   readTickAt(blockNumber: bigint): Promise<number>
 }
 
@@ -14,8 +15,10 @@ export class PortfolioPriceOracle {
   private readonly cache = new Map<string, number | null>()
   private readonly sources: PoolPriceSource[]
 
-  constructor(sources: PoolPriceSource[], readonly usdgAddress: Address) {
+  constructor(sources: PoolPriceSource[], readonly usdgAddress: Address, readonly wethAddress?: Address) {
     this.sources = [...new Map(sources.map((source) => [source.key, source])).values()]
+      .filter((source) => (source.liquidity ?? 1n) > 0n)
+      .sort((left, right) => compareLiquidity(right.liquidity, left.liquidity))
   }
 
   async tokenPriceUsdg(token: TokenInfo, blockNumber?: bigint): Promise<number | null> {
@@ -33,11 +36,11 @@ export class PortfolioPriceOracle {
     const candidates: number[] = []
     const intermediates = new Set<Address>()
     for (const source of this.sources) {
-      if (same(source.token0.address, token.address)) intermediates.add(source.token1.address)
-      if (same(source.token1.address, token.address)) intermediates.add(source.token0.address)
+      if (this.sameAsset(source.token0.address, token.address)) intermediates.add(source.token1.address)
+      if (this.sameAsset(source.token1.address, token.address)) intermediates.add(source.token0.address)
     }
     for (const intermediate of intermediates) {
-      if (same(intermediate, this.usdgAddress)) continue
+      if (this.sameAsset(intermediate, this.usdgAddress)) continue
       const first = await this.rates(token.address, intermediate, blockNumber)
       const second = await this.rates(intermediate, this.usdgAddress, blockNumber)
       for (const left of first) for (const right of second) candidates.push(left * right)
@@ -57,19 +60,28 @@ export class PortfolioPriceOracle {
   private async rates(from: Address, to: Address, blockNumber?: bigint) {
     const result: number[] = []
     for (const source of this.sources) {
-      const forward = same(source.token0.address, from) && same(source.token1.address, to)
-      const reverse = same(source.token1.address, from) && same(source.token0.address, to)
+      const forward = this.sameAsset(source.token0.address, from) && this.sameAsset(source.token1.address, to)
+      const reverse = this.sameAsset(source.token1.address, from) && this.sameAsset(source.token0.address, to)
       if (!forward && !reverse) continue
       try {
         const tick = blockNumber == null ? source.currentTick : await source.readTickAt(blockNumber)
         const token1PerToken0 = tickToPrice(tick, source.token0.decimals, source.token1.decimals)
         const rate = forward ? token1PerToken0 : 1 / token1PerToken0
-        if (Number.isFinite(rate) && rate > 0) result.push(rate)
+        if (Number.isFinite(rate) && rate > 0) {
+          result.push(rate)
+          break
+        }
       } catch {
         // A pool may not have existed at the requested historical block.
       }
     }
     return result
+  }
+
+  private sameAsset(left: string, right: string) {
+    if (same(left, right)) return true
+    if (!this.wethAddress) return false
+    return (isNative(left) && same(right, this.wethAddress)) || (isNative(right) && same(left, this.wethAddress))
   }
 }
 
@@ -97,6 +109,14 @@ function median(values: number[]) {
 
 function same(left: string, right: string) {
   return left.toLowerCase() === right.toLowerCase()
+}
+
+function isNative(address: string) {
+  return /^0x0{40}$/i.test(address)
+}
+
+function compareLiquidity(left = 0n, right = 0n) {
+  return left === right ? 0 : left > right ? 1 : -1
 }
 
 function isWrappedEth(token: TokenInfo) {

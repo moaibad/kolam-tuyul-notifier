@@ -18,6 +18,18 @@ export interface StoredDiscordReportMessage {
   createdAtMs: number
 }
 
+export interface StoredReferencePool {
+  key: string
+  version: 'v3'
+  poolAddress: string
+  token0Address: string
+  token1Address: string
+  feeTier: number
+  liquidity: bigint
+  discoveredBlock: bigint
+  refreshedAtMs: number
+}
+
 export class StateDatabase {
   readonly db: Client
 
@@ -103,6 +115,21 @@ export class StateDatabase {
 
       CREATE INDEX IF NOT EXISTS discord_report_messages_status_idx
         ON discord_report_messages(status);
+
+      CREATE TABLE IF NOT EXISTS reference_pools (
+        pool_key TEXT PRIMARY KEY,
+        version TEXT NOT NULL,
+        pool_address TEXT NOT NULL,
+        token0_address TEXT NOT NULL,
+        token1_address TEXT NOT NULL,
+        fee_tier INTEGER NOT NULL,
+        liquidity TEXT NOT NULL,
+        discovered_block TEXT NOT NULL,
+        refreshed_at_ms INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS reference_pools_pair_idx
+        ON reference_pools(token0_address, token1_address);
     `)
   }
 
@@ -258,6 +285,32 @@ export class StateDatabase {
 
   async setToken(address: string, symbol: string, decimals: number) {
     await this.execute('INSERT INTO token_metadata(address, symbol, decimals) VALUES(?, ?, ?) ON CONFLICT(address) DO UPDATE SET symbol = excluded.symbol, decimals = excluded.decimals', address.toLowerCase(), symbol, decimals)
+  }
+
+  async listReferencePools(): Promise<StoredReferencePool[]> {
+    const rows = (await this.db.execute('SELECT pool_key, version, pool_address, token0_address, token1_address, fee_tier, liquidity, discovered_block, refreshed_at_ms FROM reference_pools')).rows
+    return rows.map((row) => ({
+      key: String(row.pool_key),
+      version: String(row.version) as 'v3',
+      poolAddress: String(row.pool_address),
+      token0Address: String(row.token0_address),
+      token1Address: String(row.token1_address),
+      feeTier: Number(row.fee_tier),
+      liquidity: BigInt(String(row.liquidity)),
+      discoveredBlock: BigInt(String(row.discovered_block)),
+      refreshedAtMs: Number(row.refreshed_at_ms),
+    }))
+  }
+
+  async upsertReferencePool(pool: StoredReferencePool) {
+    await this.execute(`
+      INSERT INTO reference_pools(pool_key, version, pool_address, token0_address, token1_address, fee_tier, liquidity, discovered_block, refreshed_at_ms)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(pool_key) DO UPDATE SET
+        liquidity = excluded.liquidity,
+        refreshed_at_ms = excluded.refreshed_at_ms
+    `, pool.key, pool.version, pool.poolAddress.toLowerCase(), pool.token0Address.toLowerCase(), pool.token1Address.toLowerCase(),
+    pool.feeTier, pool.liquidity.toString(), pool.discoveredBlock.toString(), pool.refreshedAtMs)
   }
 
   private async execute(sql: string, ...args: InValue[]) {
