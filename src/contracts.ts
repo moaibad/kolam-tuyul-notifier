@@ -1,5 +1,4 @@
 import { getAddress, type Address, type PublicClient } from 'viem'
-import type { AppConfig } from './config.js'
 
 export const erc20Abi = [
   { type: 'function', name: 'symbol', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
@@ -165,13 +164,13 @@ export const robinhoodV3Deployments = {
   v3PositionManager: getAddress('0x73991a25c818bf1f1128deaab1492d45638de0d3'),
 }
 
-export function resolveDeployments(config: AppConfig): DeploymentAddresses {
+export function resolveDeployments(): DeploymentAddresses {
   return {
     v3Factory: robinhoodV3Deployments.v3Factory,
-    v3PositionManager: config.contracts.v3PositionManager ?? robinhoodV3Deployments.v3PositionManager,
-    v4PositionManager: config.contracts.v4PositionManager ?? robinhoodV4Deployments.v4PositionManager,
-    v4PoolManager: config.contracts.v4PoolManager ?? robinhoodV4Deployments.v4PoolManager,
-    v4StateView: config.contracts.v4StateView ?? robinhoodV4Deployments.v4StateView,
+    v3PositionManager: robinhoodV3Deployments.v3PositionManager,
+    v4PositionManager: robinhoodV4Deployments.v4PositionManager,
+    v4PoolManager: robinhoodV4Deployments.v4PoolManager,
+    v4StateView: robinhoodV4Deployments.v4StateView,
     warnMissingV3: false,
   }
 }

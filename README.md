@@ -33,17 +33,9 @@ DISCORD_GUILD_ID=
 DISCORD_CHANNEL_ID=
 WALLET_ADDRESS=
 ROBINHOOD_RPC_URL=https://rpc.mainnet.chain.robinhood.com
-USDG_ADDRESS=
 ```
 
-The app bundles the official Robinhood Chain v3/v4 deployments and USDG token address. Leave these blank unless you need to override them:
-
-```dotenv
-UNISWAP_V3_POSITION_MANAGER_ADDRESS=
-UNISWAP_V4_POSITION_MANAGER_ADDRESS=
-UNISWAP_V4_POOL_MANAGER_ADDRESS=
-UNISWAP_V4_STATE_VIEW_ADDRESS=
-```
+The app automatically uses the bundled official Robinhood Chain v3/v4 deployments and USDG token address.
 
 ## Run
 

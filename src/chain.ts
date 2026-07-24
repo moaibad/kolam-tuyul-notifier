@@ -21,10 +21,6 @@ export function createChainClient(config: AppConfig) {
   })
 }
 
-export function explorerAddressUrl(address: string) {
-  return `${robinhoodChain.blockExplorers.default.url}/address/${address}`
-}
-
 export function explorerTokenUrl(address: string, tokenId: bigint) {
   return `${robinhoodChain.blockExplorers.default.url}/token/${address}/instance/${tokenId.toString()}`
 }

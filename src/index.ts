@@ -13,7 +13,7 @@ const config = loadConfig()
 const logger = pino({ level: config.logLevel })
 const db = new StateDatabase(config.stateDatabasePath)
 const client = createChainClient(config)
-const deployments = resolveDeployments(config)
+const deployments = resolveDeployments()
 
 try {
   await validateContractCode(client, deployments)

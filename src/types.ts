@@ -1,4 +1,4 @@
-import type { Address, Hash } from 'viem'
+import type { Address } from 'viem'
 
 export type PositionVersion = 'v3' | 'v4'
 export type RangeStatus = 'in_range' | 'out_of_range'
@@ -82,20 +82,4 @@ export interface TransitionAlert {
 export interface RefreshResult {
   portfolio: PortfolioSnapshot
   alerts: TransitionAlert[]
-}
-
-export interface AccountingSummary {
-  depositedUsdg: number
-  withdrawnUsdg: number
-  claimedFeesUsdg: number
-}
-
-export interface CashflowRecord {
-  positionId: string
-  txHash: Hash
-  logIndex: number
-  blockNumber: bigint
-  timestampMs: number
-  type: 'deposit' | 'withdrawal' | 'fee'
-  amountUsdg: number
 }

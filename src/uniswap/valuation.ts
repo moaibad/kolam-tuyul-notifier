@@ -1,9 +1,5 @@
 import { formatUnits } from 'viem'
-import type { RangeStatus, TokenInfo } from '../types.js'
-
-export function isUsdg(token: TokenInfo, usdgAddress?: string) {
-  return Boolean(usdgAddress && token.address.toLowerCase() === usdgAddress.toLowerCase()) || token.symbol.toUpperCase() === 'USDG'
-}
+import type { RangeStatus } from '../types.js'
 
 export function formatTokenAmount(raw: bigint, decimals: number, digits = 4) {
   return formatNumber(Number(formatUnits(raw, decimals)), digits)
