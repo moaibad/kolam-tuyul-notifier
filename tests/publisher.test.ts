@@ -79,6 +79,17 @@ describe('ReportPublisher', () => {
       ],
       createdTimestamp: 30,
     }))
+    history.set('position-mobile', legacyMessage({
+      id: 'position-mobile',
+      title: 'PONS / USDG',
+      description: 'Uniswap v4 · 0.70% fee · #267844',
+      fields: [
+        { name: '💼 Position', value: 'Deposit: 1 USDG' },
+        { name: '💧 Value', value: 'Total: 1 USDG' },
+        { name: '📍 Status', value: '🟢 IN RANGE' },
+      ],
+      createdTimestamp: 25,
+    }))
     history.set('alert', legacyMessage({ id: 'alert', title: '🔴 Position Left Range', description: 'Uniswap v4 · #267843', createdTimestamp: 20 }))
     history.set('other', legacyMessage({ id: 'other', title: 'Another Bot Report', createdTimestamp: 10 }))
     history.set('other-uniswap', legacyMessage({ id: 'other-uniswap', title: 'Trade Filled', description: 'Uniswap v4 · #267843', createdTimestamp: 8 }))
@@ -87,7 +98,7 @@ describe('ReportPublisher', () => {
 
     await createPublisher(mock.channel, db).publish(refreshResult({ positions: [] }))
 
-    expect(mock.deletedIds).toEqual(expect.arrayContaining(['portfolio-newest', 'portfolio-duplicate', 'position-old']))
+    expect(mock.deletedIds).toEqual(expect.arrayContaining(['portfolio-newest', 'portfolio-duplicate', 'position-old', 'position-mobile']))
     expect(mock.deletedIds).not.toEqual(expect.arrayContaining(['alert', 'other', 'other-uniswap', 'foreign']))
     expect((await db.listDiscordReportMessages('current')).map((message) => message.messageId)).toEqual(['sent-1'])
   })

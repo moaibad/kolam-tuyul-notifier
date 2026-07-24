@@ -56,32 +56,9 @@ export function buildPositionEmbed(position: PositionSnapshot, outOfRangeEmphasi
     .setTitle(`${isOut ? '🟠' : '🟢'} ${position.token0.symbol} / ${position.token1.symbol}`)
     .setDescription(`Uniswap ${position.version} · ${position.feeLabel ?? `${formatNumber(position.feeTier / 10_000, 2)}%`} fee · #${position.tokenId.toString()}`)
     .addFields(
-      {
-        name: 'Status',
-        value: `**${getPositionStatusLabel(position, outOfRangeEmphasisAfterMs, nowMs)}**`,
-      },
-      priceMetric('Current Price', position.currentPrice, position.quoteToken.symbol),
-      priceMetric('Lower', position.lowerPrice, position.quoteToken.symbol),
-      priceMetric('Upper', position.upperPrice, position.quoteToken.symbol),
-      { name: 'Range Position', value: getRangeMarker(position) },
-      metric('Deposited', quoteAccountingValue(position, position.depositedValueQuote)),
-      metric('Total Result', quoteAccountingValue(position, position.totalResultValueQuote)),
-      lpValueMetric(position),
-      {
-        name: 'Fees',
-        value: position.accountingStatus === 'synced'
-          ? `Claimed: ${formatQuoteValue(position.claimedFeesValueQuote, position)}\nUnclaimed: ${formatQuoteValue(position.unclaimedFeesValueQuote, position)}\n**Total: ${formatQuoteValue(totalFeesQuote, position)}**`
-          : `**${quoteAccountingValue(position, totalFeesQuote)}**`,
-        inline: false,
-      },
-      {
-        name: 'Profit / Loss',
-        value: position.accountingStatus === 'synced'
-          ? `${formatQuoteResult(position.netLpResultQuote, position.netLpResultPercent, position)}\n*Includes IL + fees*`
-          : `*${position.accountingStatus === 'unavailable' ? 'Unavailable' : 'Synchronizing'}*`,
-        inline: false,
-      },
-      ...(accountingNotice ? [{ name: '⚠️ Accounting', value: accountingNotice }] : []),
+      positionSection(position, totalFeesQuote, accountingNotice),
+      valueSection(position),
+      statusSection(position, outOfRangeEmphasisAfterMs, nowMs),
     )
     .setFooter({ text: `Age ${formatAge(nowMs, position.mintTimestampMs)} · Block ${formatBlock(position.blockNumber)}` })
 }
@@ -120,7 +97,30 @@ function priceMetric(name: string, value: number, quoteSymbol: string) {
   return metric(name, `${formatPrice(value)} ${quoteSymbol}`)
 }
 
-function lpValueMetric(position: PositionSnapshot) {
+function positionSection(position: PositionSnapshot, totalFeesQuote: number | null, accountingNotice?: string) {
+  const state = position.accountingStatus === 'unavailable' ? 'Unavailable' : 'Synchronizing'
+  const lines = position.accountingStatus === 'synced'
+    ? [
+        `Deposit: **${formatQuoteValue(position.depositedValueQuote, position)}**`,
+        `Current: **${formatQuoteValue(position.activeLpValueQuote, position)}**`,
+        `Fees: **${formatQuoteValue(totalFeesQuote, position)}**`,
+        `-# Claimed: ${formatQuoteValue(position.claimedFeesValueQuote, position)} · Unclaimed: ${formatQuoteValue(position.unclaimedFeesValueQuote, position)}`,
+        `Result: **${formatQuoteValue(position.totalResultValueQuote, position)}**`,
+        `P/L: **${formatCompactQuoteResult(position.netLpResultQuote, position.netLpResultPercent, position)}**`,
+        '-# Includes IL + fees',
+      ]
+    : [
+        `Deposit: **${state}**`,
+        `Current: **${formatQuoteValue(position.activeLpValueQuote, position)}**`,
+        `Fees: **${state}**`,
+        `Result: **${state}**`,
+        `P/L: **${state}**`,
+      ]
+  if (accountingNotice) lines.push(`-# ⚠️ ${accountingNotice.replaceAll('*', '')}`)
+  return { name: '💼 Position', value: trimText(lines.join('\n'), 1_024), inline: false }
+}
+
+function valueSection(position: PositionSnapshot) {
   const tokenLines = position.amounts.map((amount) => {
     const usdg = amount.valueUsdg == null ? 'USDG unavailable' : formatDollar(amount.valueUsdg)
     return `${amount.token.symbol}: ${amount.formatted} (${usdg})`
@@ -135,8 +135,24 @@ function lpValueMetric(position: PositionSnapshot) {
     ? totalPrimary
     : `${totalPrimary} (${totalUsdg == null ? 'USDG unavailable' : formatDollar(totalUsdg)})`
   return {
-    name: 'LP Composition',
-    value: [...tokenLines, `**Total: ${total}**`].join('\n'),
+    name: '💧 Value',
+    value: [`Total: **${total}**`, ...tokenLines].join('\n'),
+    inline: false,
+  }
+}
+
+function statusSection(position: PositionSnapshot, outOfRangeEmphasisAfterMs: number, nowMs: number) {
+  const statusIcon = position.status === 'in_range' ? '🟢' : '🟠'
+  const status = getPositionStatusLabel(position, outOfRangeEmphasisAfterMs, nowMs)
+  const quote = position.quoteToken.symbol
+  return {
+    name: '📍 Status',
+    value: [
+      `${statusIcon} **${status}**`,
+      `Price: **${formatPrice(position.currentPrice)} ${quote}**`,
+      `-# Range: ${formatPrice(position.lowerPrice)} – ${formatPrice(position.upperPrice)} ${quote}`,
+      getRangeMarker(position),
+    ].join('\n'),
     inline: false,
   }
 }
@@ -183,12 +199,6 @@ function trimDecimal(value: string) {
   return value.replace(/0+$/, '').replace(/\.$/, '')
 }
 
-function quoteAccountingValue(position: PositionSnapshot, value: number | null) {
-  if (position.accountingStatus === 'unavailable') return 'Unavailable'
-  if (position.accountingStatus === 'syncing') return 'Synchronizing'
-  return formatQuoteValue(value, position)
-}
-
 function formatQuoteValue(value: number | null, position: Pick<PositionSnapshot, 'quoteToken' | 'quoteTokenPriceUsdg'>, signed = false) {
   if (value == null) return 'Unavailable'
   const primary = formatQuotePrimary(value, position.quoteToken.symbol, signed)
@@ -209,10 +219,10 @@ function formatDollar(value: number, signed = false) {
   return `${sign}$${formatNumber(Math.abs(value), 2)}`
 }
 
-function formatQuoteResult(value: number | null, percent: number | null, position: Pick<PositionSnapshot, 'quoteToken' | 'quoteTokenPriceUsdg'>) {
-  if (value == null || percent == null) return '*Unavailable*'
+function formatCompactQuoteResult(value: number | null, percent: number | null, position: Pick<PositionSnapshot, 'quoteToken' | 'quoteTokenPriceUsdg'>) {
+  if (value == null || percent == null) return 'Unavailable'
   const percentSign = percent > 0 ? '+' : ''
-  return `**${formatQuoteValue(value, position, true)}**\n${percentSign}${formatNumber(percent, 2)}%`
+  return `${formatQuoteValue(value, position, true)} · ${percentSign}${formatNumber(percent, 2)}%`
 }
 
 function addNullable(left: number | null | undefined, right: number | null | undefined) {
