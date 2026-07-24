@@ -27,6 +27,13 @@ describe('state database migrations', () => {
     await database.insertPositionCashflow(cashflow)
     await database.insertPositionCashflow(cashflow)
     expect((await database.getPositionCashflowTotals(cashflow.positionId)).depositedUsdg).toBe(30)
+    expect(await database.listPositionCashflows(cashflow.positionId)).toEqual([{
+      blockNumber: 10n,
+      logIndex: 1,
+      type: 'deposit',
+      token0Raw: 1n,
+      token1Raw: 2n,
+    }])
   })
 
   it('atomically activates a Discord report generation and retains stale messages for cleanup', async () => {

@@ -17,6 +17,7 @@ import { calculatePositionResult } from './accounting.js'
 import { PortfolioPriceOracle, quotePrices, selectQuoteToken, type PoolPriceSource } from './price-oracle.js'
 import { formatTokenAmount, getRangeStatus } from './valuation.js'
 import { getSqrtRatioAtTick } from './tick-math.js'
+import { calculateEntryValuation, valueRawAtEntryPrice } from './entry-valuation.js'
 
 const Q128 = 2n ** 128n
 const UINT256 = 2n ** 256n
@@ -176,18 +177,40 @@ export async function buildPositionSnapshot(input: {
   const previous = await input.db.getPositionStatus(position.id)
   const outOfRangeSinceMs = status === 'out_of_range' ? previous.outOfRangeSinceMs ?? input.nowMs : undefined
   const [amount0Raw, amount1Raw] = getAmountsForLiquidity(position.sqrtPriceX96, position.currentTick, position.tickLower, position.tickUpper, position.liquidity)
-  const [value0, value1, unclaimedValue0, unclaimedValue1] = await Promise.all([
-    input.oracle.valueUsdg(position.token0, amount0Raw),
-    input.oracle.valueUsdg(position.token1, amount1Raw),
-    input.oracle.valueUsdg(position.token0, position.unclaimed0),
-    input.oracle.valueUsdg(position.token1, position.unclaimed1),
-  ])
+  let accountingStatus = accounting.status
+  let accountingError = accounting.error
+  let depositedUsdg: number | null = null
+  let withdrawnUsdg: number | null = null
+  let claimedFeesUsdg: number | null = null
+  let value0: number | null = null
+  let value1: number | null = null
+  let unclaimedFeesUsdg: number | null = null
+  if (accounting.status === 'synced') {
+    try {
+      const entry = await calculateEntryValuation({
+        token0: position.token0,
+        token1: position.token1,
+        cashflows: await input.db.listPositionCashflows(position.id),
+        priceAt: (token, historicalBlock) => input.oracle.tokenPriceUsdg(token, historicalBlock),
+      })
+      depositedUsdg = entry.depositedUsdg
+      withdrawnUsdg = entry.withdrawnUsdg
+      claimedFeesUsdg = entry.claimedFeesUsdg
+      value0 = valueRawAtEntryPrice(amount0Raw, position.token0, entry.basis.token0PriceUsdg)
+      value1 = valueRawAtEntryPrice(amount1Raw, position.token1, entry.basis.token1PriceUsdg)
+      unclaimedFeesUsdg =
+        valueRawAtEntryPrice(position.unclaimed0, position.token0, entry.basis.token0PriceUsdg) +
+        valueRawAtEntryPrice(position.unclaimed1, position.token1, entry.basis.token1PriceUsdg)
+    } catch (error) {
+      accountingStatus = 'unavailable'
+      accountingError = error instanceof Error ? error.message : String(error)
+    }
+  }
   const currentLpValueUsdg = addNullable(value0, value1)
-  const unclaimedFeesUsdg = addNullable(unclaimedValue0, unclaimedValue1)
   const result = calculatePositionResult({
-    depositedUsdg: accounting.depositedUsdg,
-    withdrawnUsdg: accounting.withdrawnUsdg,
-    claimedFeesUsdg: accounting.claimedFeesUsdg,
+    depositedUsdg,
+    withdrawnUsdg,
+    claimedFeesUsdg,
     currentLpValueUsdg,
     unclaimedFeesUsdg,
   })
@@ -219,15 +242,15 @@ export async function buildPositionSnapshot(input: {
       { token: position.token1, raw: amount1Raw, formatted: formatTokenAmount(amount1Raw, position.token1.decimals), valueUsdg: value1 },
     ],
     currentLpValueUsdg,
-    claimedFeesUsdg: accounting.claimedFeesUsdg,
+    claimedFeesUsdg,
     unclaimedFeesUsdg,
-    depositedUsdg: accounting.depositedUsdg,
-    withdrawnUsdg: accounting.withdrawnUsdg,
+    depositedUsdg,
+    withdrawnUsdg,
     totalResultUsdg: result.totalResultUsdg,
     profitLossUsdg: result.profitLossUsdg,
     profitLossPercent: result.profitLossPercent,
-    accountingStatus: accounting.status,
-    accountingError: accounting.error,
+    accountingStatus,
+    accountingError,
     uniswapUrl: `https://app.uniswap.org/portfolio/${input.walletAddress}`,
     explorerUrl: explorerTokenUrl(position.position.manager, position.position.tokenId),
   }

@@ -30,6 +30,14 @@ export interface StoredReferencePool {
   refreshedAtMs: number
 }
 
+export interface StoredPositionCashflow {
+  blockNumber: bigint
+  logIndex: number
+  type: 'deposit' | 'withdrawal' | 'fee'
+  token0Raw: bigint
+  token1Raw: bigint
+}
+
 export class StateDatabase {
   readonly db: Client
 
@@ -264,6 +272,26 @@ export class StateDatabase {
       if (row.type === 'fee') totals.claimedFeesUsdg = Number(row.total)
     }
     return totals
+  }
+
+  async listPositionCashflows(positionId: string): Promise<StoredPositionCashflow[]> {
+    const rows = (await this.db.execute({
+      sql: `
+        SELECT block_number, log_index, type, token0_raw, token1_raw
+        FROM position_cashflows_v2
+        WHERE position_id = ? AND type IN ('deposit', 'withdrawal', 'fee')
+        ORDER BY CAST(block_number AS INTEGER), log_index,
+          CASE type WHEN 'deposit' THEN 0 WHEN 'withdrawal' THEN 1 ELSE 2 END
+      `,
+      args: [positionId],
+    })).rows
+    return rows.map((row) => ({
+      blockNumber: BigInt(String(row.block_number)),
+      logIndex: Number(row.log_index),
+      type: String(row.type) as StoredPositionCashflow['type'],
+      token0Raw: BigInt(String(row.token0_raw)),
+      token1Raw: BigInt(String(row.token1_raw)),
+    }))
   }
 
   async getPendingPrincipal(positionId: string): Promise<[bigint, bigint]> {
