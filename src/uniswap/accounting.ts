@@ -9,35 +9,55 @@ export function calculatePositionResult(input: { depositedUsdg: number | null; w
   return { totalResultUsdg, profitLossUsdg, profitLossPercent }
 }
 
-export function calculatePortfolioTotals(positions: Array<{ depositedUsdg: number | null; currentLpValueUsdg: number | null; claimedFeesUsdg: number | null; unclaimedFeesUsdg: number | null; totalResultUsdg: number | null }>) {
-  const partial = positions.some(
-    (position) =>
-      position.depositedUsdg == null ||
-      position.currentLpValueUsdg == null ||
-      position.claimedFeesUsdg == null ||
-      position.unclaimedFeesUsdg == null ||
-      position.totalResultUsdg == null,
-  )
-  const totals = positions.reduce<{
-    depositedUsdg: number
-    currentLpValueUsdg: number
-    claimedFeesUsdg: number
-    unclaimedFeesUsdg: number
-    totalResultUsdg: number
-  }>(
-    (acc, position) => {
-      if (position.depositedUsdg != null) acc.depositedUsdg += position.depositedUsdg
-      if (position.currentLpValueUsdg != null) acc.currentLpValueUsdg += position.currentLpValueUsdg
-      if (position.claimedFeesUsdg != null) acc.claimedFeesUsdg += position.claimedFeesUsdg
-      if (position.unclaimedFeesUsdg != null) acc.unclaimedFeesUsdg += position.unclaimedFeesUsdg
-      if (position.totalResultUsdg != null) acc.totalResultUsdg += position.totalResultUsdg
-      return acc
-    },
-    { depositedUsdg: 0, currentLpValueUsdg: 0, claimedFeesUsdg: 0, unclaimedFeesUsdg: 0, totalResultUsdg: 0 },
-  )
-  const { profitLossUsdg, profitLossPercent } = calculateProfit(totals.totalResultUsdg, totals.depositedUsdg)
-  if (positions.length === 0) return { ...totals, profitLossUsdg, profitLossPercent, partial: false }
-  return { ...totals, profitLossUsdg: partial ? null : profitLossUsdg, profitLossPercent: partial ? null : profitLossPercent, partial }
+export function calculatePortfolioTotals(positions: Array<{
+  accountingStatus: 'syncing' | 'synced' | 'unavailable'
+  quoteTokenPriceUsdg: number | null
+  depositedValueQuote: number | null
+  amounts: Array<{ valueUsdg: number | null }>
+  claimedFeesValueQuote: number | null
+  unclaimedFeesValueQuote: number | null
+  totalResultValueQuote: number | null
+  netLpResultQuote: number | null
+  hodlValueQuote: number | null
+}>) {
+  let benchmarkUsdg = 0
+  let profitLossUsdg = 0
+  const totals = { depositedUsdg: 0, currentLpValueUsdg: 0, claimedFeesUsdg: 0, unclaimedFeesUsdg: 0, totalResultUsdg: 0 }
+  let partial = false
+
+  for (const position of positions) {
+    const price = position.quoteTokenPriceUsdg
+    const complete = position.accountingStatus === 'synced' &&
+      price != null &&
+      position.depositedValueQuote != null &&
+      position.amounts.length > 0 &&
+      position.amounts.every((amount) => amount.valueUsdg != null) &&
+      position.claimedFeesValueQuote != null &&
+      position.unclaimedFeesValueQuote != null &&
+      position.totalResultValueQuote != null &&
+      position.netLpResultQuote != null &&
+      position.hodlValueQuote != null
+    if (!complete) {
+      partial = true
+      continue
+    }
+
+    totals.depositedUsdg += position.depositedValueQuote! * price!
+    totals.currentLpValueUsdg += position.amounts.reduce((sum, amount) => sum + amount.valueUsdg!, 0)
+    totals.claimedFeesUsdg += position.claimedFeesValueQuote! * price!
+    totals.unclaimedFeesUsdg += position.unclaimedFeesValueQuote! * price!
+    totals.totalResultUsdg += position.totalResultValueQuote! * price!
+    profitLossUsdg += position.netLpResultQuote! * price!
+    benchmarkUsdg += position.hodlValueQuote! * price!
+  }
+
+  if (positions.length === 0) return { ...totals, profitLossUsdg: 0, profitLossPercent: 0, partial: false }
+  return {
+    ...totals,
+    profitLossUsdg: partial ? null : profitLossUsdg,
+    profitLossPercent: partial ? null : benchmarkUsdg > 0 ? (profitLossUsdg / benchmarkUsdg) * 100 : 0,
+    partial,
+  }
 }
 
 export function feesTotal(claimedFeesUsdg: number | null, unclaimedFeesUsdg: number | null) {

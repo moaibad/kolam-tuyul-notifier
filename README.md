@@ -13,6 +13,7 @@ The bot is read-only. It does not need a wallet private key or seed phrase.
 - Shows initial deposit, current LP value, claimed fees, unclaimed fees, total result, and profit/loss.
 - Shows deposited value, current LP value, fees, total result, and profit/loss in the pair quote token.
 - Profit/loss uses the deposited-token HODL benchmark internally and therefore represents standard impermanent loss plus fees without exposing a separate IL field.
+- Portfolio totals aggregate those same position-native IL and fee metrics at each quote token's live USDG price.
 - Non-USDG position values keep their pair quote-token amount and append a live USDG equivalent, for example `0.000426 ETH ($0.85)`.
 - LP Value includes a per-token breakdown with each token's live USDG contribution and a non-partial total.
 - Position embeds use full-width composition, fee, and performance sections, and preserve significant digits for very small pair prices.

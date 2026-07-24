@@ -37,7 +37,7 @@ export function buildPortfolioEmbed(portfolio: PortfolioSnapshot) {
       {
         name: 'Profit / Loss',
         value: accountingSynced
-          ? formatProfitLoss(portfolio.totals.profitLossUsdg, portfolio.totals.profitLossPercent)
+          ? `${formatProfitLoss(portfolio.totals.profitLossUsdg, portfolio.totals.profitLossPercent)}\n*Includes IL + fees*`
           : `*${accountingUnavailable ? 'Unavailable for one or more positions' : 'Synchronizing position history'}*`,
         inline: true,
       },

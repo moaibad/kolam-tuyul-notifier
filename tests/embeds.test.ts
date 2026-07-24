@@ -28,7 +28,7 @@ describe('portfolio embed', () => {
     ])
     expect(embed.fields?.every((field) => field.inline)).toBe(true)
     expect(fieldValue(embed, 'Total Fees')).toContain('118.40 USDG')
-    expect(fieldValue(embed, 'Profit / Loss')).toBe('**+1,302.60 USDG**\n+13.03%')
+    expect(fieldValue(embed, 'Profit / Loss')).toBe('**+1,302.60 USDG**\n+13.03%\n*Includes IL + fees*')
     expect(embed.footer?.text).toBe('Updated 14:35 UTC · Block 38,291,407')
     expect(JSON.stringify(embed)).not.toContain('```')
   })
@@ -41,7 +41,7 @@ describe('portfolio embed', () => {
     const embed = buildPortfolioEmbed(portfolio).toJSON()
 
     expect(embed.color).toBe(0xef4444)
-    expect(fieldValue(embed, 'Profit / Loss')).toBe('**-100.00 USDG**\n-1.00%')
+    expect(fieldValue(embed, 'Profit / Loss')).toBe('**-100.00 USDG**\n-1.00%\n*Includes IL + fees*')
   })
 
   it('marks partial and unavailable totals without rendering false zeroes', () => {

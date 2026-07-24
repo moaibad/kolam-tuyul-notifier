@@ -73,7 +73,9 @@ export class RefreshService {
         alerts.push({ position: snapshot, from: 'in_range', to: 'out_of_range', detectedAtMs: nowMs })
       }
       await this.db.setPositionStatus(snapshot.id, snapshot.status, snapshot.outOfRangeSinceMs)
-      if (snapshot.currentLpValueUsdg == null) warnings.push(`Position ${snapshot.version} #${snapshot.tokenId.toString()} has no USDG price route and is excluded from complete totals.`)
+      if (snapshot.quoteTokenPriceUsdg == null || snapshot.amounts.some((amount) => amount.valueUsdg == null)) {
+        warnings.push(`Position ${snapshot.version} #${snapshot.tokenId.toString()} has no current USDG price route and is excluded from complete totals.`)
+      }
       if (snapshot.accountingStatus === 'unavailable') warnings.push(`Position ${snapshot.version} #${snapshot.tokenId.toString()} accounting is unavailable: ${snapshot.accountingError ?? 'unknown reason'}`)
       positions.push(snapshot)
     }
