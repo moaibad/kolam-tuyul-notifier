@@ -16,7 +16,7 @@ export function buildPortfolioEmbed(portfolio: PortfolioSnapshot) {
   const inRange = portfolio.positions.filter((position) => position.status === 'in_range').length
   const outOfRange = portfolio.positions.length - inRange
   const accountingSynced = portfolio.positions.length === 0 || portfolio.positions.every((position) => position.accountingStatus === 'synced')
-  const accountingUnavailable = portfolio.positions.some((position) => position.accountingStatus === 'unavailable')
+  const accountingUnavailable = portfolio.positions.some((position) => position.accountingStatus === 'unavailable' || position.accountingStatus === 'partial')
   const isPartial = portfolio.totals.partial || !accountingSynced
   const warnings = portfolio.warnings.length > 0 ? trimText(portfolio.warnings.map((warning) => `• ${warning}`).join('\n'), 1_024) : undefined
   const accountingState = accountingUnavailable ? 'Unavailable' : 'Synchronizing'
@@ -98,7 +98,7 @@ function priceMetric(name: string, value: number, quoteSymbol: string) {
 }
 
 function positionSection(position: PositionSnapshot, totalFeesQuote: number | null, accountingNotice?: string) {
-  const state = position.accountingStatus === 'unavailable' ? 'Unavailable' : 'Synchronizing'
+  const state = position.accountingStatus === 'unavailable' ? 'Unavailable' : position.accountingStatus === 'partial' ? 'Partial' : 'Synchronizing'
   const lines = position.accountingStatus === 'synced'
     ? [
         `Deposit: **${formatQuoteValue(position.depositedValueQuote, position)}**`,
@@ -231,6 +231,9 @@ function addNullable(left: number | null | undefined, right: number | null | und
 
 function getAccountingNotice(position: PositionSnapshot) {
   if (position.accountingStatus === 'syncing') return '*Position history is still synchronizing.*'
+  if (position.accountingStatus === 'partial') {
+    return trimText(position.accountingError ? `Accounting partially synchronized: ${position.accountingError}` : 'Accounting history is partially synchronized.', 1_024)
+  }
   if (position.accountingStatus !== 'unavailable') return undefined
   return trimText(position.accountingError ? `Accounting unavailable: ${position.accountingError}` : 'Accounting is unavailable for this position.', 1_024)
 }

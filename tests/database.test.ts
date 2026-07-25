@@ -36,6 +36,76 @@ describe('state database migrations', () => {
     }])
   })
 
+  it('commits a completed block with cashflows and accounting totals atomically', async () => {
+    const database = new StateDatabase(':memory:')
+    databases.push(database)
+    await database.initialize()
+    const deposit = { positionId: 'v4:manager:1', txHash: '0x01', logIndex: 1, blockNumber: 10n, timestampMs: 20, type: 'deposit' as const, token0Raw: 1n, token1Raw: 2n, valueUsdg: 30 }
+
+    await database.commitAccountingBlock({
+      positionId: deposit.positionId,
+      blockNumber: 10n,
+      status: 'partial',
+      cashflows: [deposit],
+    })
+
+    expect(await database.getAccounting(deposit.positionId)).toMatchObject({
+      status: 'partial',
+      depositedUsdg: 30,
+      withdrawnUsdg: 0,
+      claimedFeesUsdg: 0,
+      lastSyncedBlock: 10n,
+    })
+    expect(await database.listPositionCashflows(deposit.positionId)).toHaveLength(1)
+  })
+
+  it('preserves checkpoint and totals when a later accounting attempt fails', async () => {
+    const database = new StateDatabase(':memory:')
+    databases.push(database)
+    await database.initialize()
+    const deposit = { positionId: 'v4:manager:1', txHash: '0x01', logIndex: 1, blockNumber: 10n, timestampMs: 20, type: 'deposit' as const, token0Raw: 1n, token1Raw: 2n, valueUsdg: 30 }
+    await database.commitAccountingBlock({ positionId: deposit.positionId, blockNumber: 10n, status: 'partial', cashflows: [deposit] })
+
+    await database.markAccountingFailure(deposit.positionId, 'archive unavailable at block 11')
+
+    expect(await database.getAccounting(deposit.positionId)).toMatchObject({
+      status: 'partial',
+      depositedUsdg: 30,
+      lastSyncedBlock: 10n,
+      error: 'archive unavailable at block 11',
+    })
+    expect(await database.listPositionCashflows(deposit.positionId)).toHaveLength(1)
+  })
+
+  it('keeps first-pass failures unavailable without inventing a checkpoint', async () => {
+    const database = new StateDatabase(':memory:')
+    databases.push(database)
+    await database.initialize()
+
+    await database.markAccountingFailure('v4:manager:1', 'archive unavailable')
+
+    expect(await database.getAccounting('v4:manager:1')).toMatchObject({
+      status: 'unavailable',
+      depositedUsdg: null,
+      lastSyncedBlock: undefined,
+      error: 'archive unavailable',
+    })
+  })
+
+  it('does not duplicate a block batch when it is committed again', async () => {
+    const database = new StateDatabase(':memory:')
+    databases.push(database)
+    await database.initialize()
+    const deposit = { positionId: 'v4:manager:1', txHash: '0x01', logIndex: 1, blockNumber: 10n, timestampMs: 20, type: 'deposit' as const, token0Raw: 1n, token1Raw: 2n, valueUsdg: 30 }
+    const commit = () => database.commitAccountingBlock({ positionId: deposit.positionId, blockNumber: 10n, status: 'partial' as const, cashflows: [deposit] })
+
+    await commit()
+    await commit()
+
+    expect((await database.getPositionCashflowTotals(deposit.positionId)).depositedUsdg).toBe(30)
+    expect(await database.listPositionCashflows(deposit.positionId)).toHaveLength(1)
+  })
+
   it('atomically activates a Discord report generation and retains stale messages for cleanup', async () => {
     const database = new StateDatabase(':memory:')
     databases.push(database)

@@ -10,7 +10,7 @@ export function calculatePositionResult(input: { depositedUsdg: number | null; w
 }
 
 export function calculatePortfolioTotals(positions: Array<{
-  accountingStatus: 'syncing' | 'synced' | 'unavailable'
+  accountingStatus: 'syncing' | 'synced' | 'partial' | 'unavailable'
   quoteTokenPriceUsdg: number | null
   depositedValueQuote: number | null
   amounts: Array<{ valueUsdg: number | null }>

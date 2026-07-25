@@ -38,6 +38,18 @@ export interface StoredPositionCashflow {
   token1Raw: bigint
 }
 
+export interface PositionCashflowWrite {
+  positionId: string
+  txHash: string
+  logIndex: number
+  blockNumber: bigint
+  timestampMs: number
+  type: 'deposit' | 'withdrawal' | 'fee' | 'decrease' | 'principal_collect'
+  token0Raw: bigint
+  token1Raw: bigint
+  valueUsdg: number
+}
+
 export class StateDatabase {
   readonly db: Client
 
@@ -259,8 +271,83 @@ export class StateDatabase {
       `, input.positionId, input.status, input.depositedUsdg, input.withdrawnUsdg, input.claimedFeesUsdg, input.lastSyncedBlock?.toString() ?? null, input.error ?? null)
   }
 
-  async insertPositionCashflow(input: { positionId: string; txHash: string; logIndex: number; blockNumber: bigint; timestampMs: number; type: 'deposit' | 'withdrawal' | 'fee' | 'decrease' | 'principal_collect'; token0Raw: bigint; token1Raw: bigint; valueUsdg: number }) {
+  async insertPositionCashflow(input: PositionCashflowWrite) {
     await this.execute('INSERT OR IGNORE INTO position_cashflows_v2(position_id, tx_hash, log_index, block_number, timestamp_ms, type, token0_raw, token1_raw, value_usdg) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)', input.positionId, input.txHash, input.logIndex, input.blockNumber.toString(), input.timestampMs, input.type, input.token0Raw.toString(), input.token1Raw.toString(), input.valueUsdg)
+  }
+
+  async commitAccountingBlock(input: {
+    positionId: string
+    blockNumber: bigint
+    status: AccountingStatus
+    cashflows?: PositionCashflowWrite[]
+    error?: string
+  }) {
+    const cashflows = input.cashflows ?? []
+    await this.db.batch([
+      ...cashflows.map((cashflow) => statement(
+        'INSERT OR IGNORE INTO position_cashflows_v2(position_id, tx_hash, log_index, block_number, timestamp_ms, type, token0_raw, token1_raw, value_usdg) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        cashflow.positionId,
+        cashflow.txHash,
+        cashflow.logIndex,
+        cashflow.blockNumber.toString(),
+        cashflow.timestampMs,
+        cashflow.type,
+        cashflow.token0Raw.toString(),
+        cashflow.token1Raw.toString(),
+        cashflow.valueUsdg,
+      )),
+      {
+        sql: `
+          INSERT INTO position_accounting(position_id, status, deposited_usdg, withdrawn_usdg, claimed_fees_usdg, last_synced_block, error)
+          VALUES(
+            ?,
+            ?,
+            COALESCE((SELECT SUM(value_usdg) FROM position_cashflows_v2 WHERE position_id = ? AND type = 'deposit'), 0),
+            COALESCE((SELECT SUM(value_usdg) FROM position_cashflows_v2 WHERE position_id = ? AND type = 'withdrawal'), 0),
+            COALESCE((SELECT SUM(value_usdg) FROM position_cashflows_v2 WHERE position_id = ? AND type = 'fee'), 0),
+            ?,
+            ?
+          )
+          ON CONFLICT(position_id) DO UPDATE SET
+            status = excluded.status,
+            deposited_usdg = excluded.deposited_usdg,
+            withdrawn_usdg = excluded.withdrawn_usdg,
+            claimed_fees_usdg = excluded.claimed_fees_usdg,
+            last_synced_block = excluded.last_synced_block,
+            error = excluded.error
+        `,
+        args: [
+          input.positionId,
+          input.status,
+          input.positionId,
+          input.positionId,
+          input.positionId,
+          input.blockNumber.toString(),
+          input.error ?? null,
+        ],
+      },
+    ], 'write')
+  }
+
+  async markAccountingFailure(positionId: string, error: string) {
+    const existing = await this.getAccounting(positionId)
+    if (existing.lastSyncedBlock == null) {
+      await this.setAccounting({
+        positionId,
+        status: 'unavailable',
+        depositedUsdg: null,
+        withdrawnUsdg: null,
+        claimedFeesUsdg: null,
+        error,
+      })
+      return
+    }
+    await this.commitAccountingBlock({
+      positionId,
+      blockNumber: existing.lastSyncedBlock,
+      status: 'partial',
+      error,
+    })
   }
 
   async getPositionCashflowTotals(positionId: string) {

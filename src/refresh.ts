@@ -76,7 +76,9 @@ export class RefreshService {
       if (snapshot.quoteTokenPriceUsdg == null || snapshot.amounts.some((amount) => amount.valueUsdg == null)) {
         warnings.push(`Position ${snapshot.version} #${snapshot.tokenId.toString()} has no current USDG price route and is excluded from complete totals.`)
       }
-      if (snapshot.accountingStatus === 'unavailable') warnings.push(`Position ${snapshot.version} #${snapshot.tokenId.toString()} accounting is unavailable: ${snapshot.accountingError ?? 'unknown reason'}`)
+      if (snapshot.accountingStatus === 'partial' || snapshot.accountingStatus === 'unavailable') {
+        warnings.push(`Position ${snapshot.version} #${snapshot.tokenId.toString()} accounting is ${snapshot.accountingStatus}: ${snapshot.accountingError ?? 'unknown reason'}`)
+      }
       positions.push(snapshot)
     }
 

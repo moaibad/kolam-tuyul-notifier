@@ -224,11 +224,12 @@ describe('position embed', () => {
 
   it.each([
     ['syncing', 'Synchronizing', 'Position history is still synchronizing.'],
+    ['partial', 'Partial', 'Accounting partially synchronized: Archive history is missing.'],
     ['unavailable', 'Unavailable', 'Archive history is missing.'],
   ] as const)('renders %s accounting explicitly', (accountingStatus, label, notice) => {
     const position = basePosition({
       accountingStatus,
-      accountingError: accountingStatus === 'unavailable' ? 'Archive history is missing.' : undefined,
+      accountingError: accountingStatus === 'unavailable' || accountingStatus === 'partial' ? 'Archive history is missing.' : undefined,
       depositedUsdg: null,
       claimedFeesUsdg: null,
       unclaimedFeesUsdg: null,

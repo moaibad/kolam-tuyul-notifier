@@ -1,7 +1,7 @@
 import type { PublicClient } from 'viem'
 import { getAddress, zeroAddress } from 'viem'
 import { v3PositionManagerAbi, v4PoolManagerAbi, v4StateViewAbi, type DeploymentAddresses } from '../contracts.js'
-import type { StateDatabase } from '../state/database.js'
+import type { PositionCashflowWrite, StateDatabase } from '../state/database.js'
 import type { PortfolioPriceOracle } from './price-oracle.js'
 import { getAmountsForLiquidity, tokenIdSalt, type PositionData } from './positions.js'
 
@@ -27,17 +27,9 @@ export async function syncPositionAccounting(input: {
     if (!mint) throw new Error('Mint block was not available from Blockscout')
     if (input.data.position.version === 'v3') await syncV3({ ...input, mintBlock: mint.blockNumber })
     else await syncV4({ ...input, mintBlock: mint.blockNumber })
-    const totals = await input.db.getPositionCashflowTotals(input.data.id)
-    await input.db.setAccounting({ positionId: input.data.id, status: 'synced', ...totals, lastSyncedBlock: input.blockNumber })
+    await input.db.commitAccountingBlock({ positionId: input.data.id, blockNumber: input.blockNumber, status: 'synced' })
   } catch (error) {
-    await input.db.setAccounting({
-      positionId: input.data.id,
-      status: 'unavailable',
-      depositedUsdg: null,
-      withdrawnUsdg: null,
-      claimedFeesUsdg: null,
-      error: error instanceof Error ? error.message : String(error),
-    })
+    await input.db.markAccountingFailure(input.data.id, error instanceof Error ? error.message : String(error))
   }
 }
 
@@ -83,92 +75,125 @@ async function syncV4(input: Parameters<typeof syncPositionAccounting>[0] & { mi
     ])
     const fee0 = (modSub(beforeGrowth[0], beforePosition[1]) * beforePosition[0]) / Q128
     const fee1 = (modSub(beforeGrowth[1], beforePosition[2]) * beforePosition[0]) / Q128
+    const cashflows: PositionCashflowWrite[] = []
+    const timestampMs = await blockTimestamp(input.client, log.blockNumber)
     if (fee0 > 0n || fee1 > 0n) {
-      await input.db.insertPositionCashflow({
+      cashflows.push({
         positionId: input.data.id,
         txHash: log.transactionHash,
         logIndex: log.logIndex,
         blockNumber: log.blockNumber,
-        timestampMs: await blockTimestamp(input.client, log.blockNumber),
+        timestampMs,
         type: 'fee',
         token0Raw: fee0,
         token1Raw: fee1,
         valueUsdg: await valuePair(input.oracle, input.data, fee0, fee1, log.blockNumber),
       })
     }
-    if (log.args.liquidityDelta === 0n) continue
-    const delta = log.args.liquidityDelta < 0n ? -log.args.liquidityDelta : log.args.liquidityDelta
-    const [amount0, amount1] = getAmountsForLiquidity(slot0[0], slot0[1], input.data.tickLower, input.data.tickUpper, delta)
-    const value = await valuePair(input.oracle, input.data, amount0, amount1, log.blockNumber)
-    const timestampMs = await blockTimestamp(input.client, log.blockNumber)
-    await input.db.insertPositionCashflow({
+    if (log.args.liquidityDelta !== 0n) {
+      const delta = log.args.liquidityDelta < 0n ? -log.args.liquidityDelta : log.args.liquidityDelta
+      const [amount0, amount1] = getAmountsForLiquidity(slot0[0], slot0[1], input.data.tickLower, input.data.tickUpper, delta)
+      const value = await valuePair(input.oracle, input.data, amount0, amount1, log.blockNumber)
+      cashflows.push({
+        positionId: input.data.id,
+        txHash: log.transactionHash,
+        logIndex: log.logIndex,
+        blockNumber: log.blockNumber,
+        timestampMs,
+        type: log.args.liquidityDelta > 0n ? 'deposit' : 'withdrawal',
+        token0Raw: amount0,
+        token1Raw: amount1,
+        valueUsdg: value,
+      })
+    }
+    await input.db.commitAccountingBlock({
       positionId: input.data.id,
-      txHash: log.transactionHash,
-      logIndex: log.logIndex,
       blockNumber: log.blockNumber,
-      timestampMs,
-      type: log.args.liquidityDelta > 0n ? 'deposit' : 'withdrawal',
-      token0Raw: amount0,
-      token1Raw: amount1,
-      valueUsdg: value,
+      status: log.blockNumber === input.blockNumber ? 'synced' : 'partial',
+      cashflows,
     })
   }
-
 }
 
 async function syncV3(input: Parameters<typeof syncPositionAccounting>[0] & { mintBlock: bigint }) {
+  const existing = await input.db.getAccounting(input.data.id)
+  const fromBlock = existing.lastSyncedBlock != null ? existing.lastSyncedBlock + 1n : input.mintBlock
+  if (fromBlock > input.blockNumber) return
   const [increases, decreases, collects] = await Promise.all([
-    getEventsChunked(input.client, { address: input.data.position.manager, abi: v3PositionManagerAbi, eventName: 'IncreaseLiquidity', args: { tokenId: input.data.position.tokenId }, fromBlock: input.mintBlock, toBlock: input.blockNumber }),
-    getEventsChunked(input.client, { address: input.data.position.manager, abi: v3PositionManagerAbi, eventName: 'DecreaseLiquidity', args: { tokenId: input.data.position.tokenId }, fromBlock: input.mintBlock, toBlock: input.blockNumber }),
-    getEventsChunked(input.client, { address: input.data.position.manager, abi: v3PositionManagerAbi, eventName: 'Collect', args: { tokenId: input.data.position.tokenId }, fromBlock: input.mintBlock, toBlock: input.blockNumber }),
+    getEventsChunked(input.client, { address: input.data.position.manager, abi: v3PositionManagerAbi, eventName: 'IncreaseLiquidity', args: { tokenId: input.data.position.tokenId }, fromBlock, toBlock: input.blockNumber }),
+    getEventsChunked(input.client, { address: input.data.position.manager, abi: v3PositionManagerAbi, eventName: 'DecreaseLiquidity', args: { tokenId: input.data.position.tokenId }, fromBlock, toBlock: input.blockNumber }),
+    getEventsChunked(input.client, { address: input.data.position.manager, abi: v3PositionManagerAbi, eventName: 'Collect', args: { tokenId: input.data.position.tokenId }, fromBlock, toBlock: input.blockNumber }),
   ])
   const events = [
     ...increases.map((log) => ({ kind: 'increase' as const, log })),
     ...decreases.map((log) => ({ kind: 'decrease' as const, log })),
     ...collects.map((log) => ({ kind: 'collect' as const, log })),
   ].sort((left, right) => Number((left.log.blockNumber ?? 0n) - (right.log.blockNumber ?? 0n)) || Number((left.log.logIndex ?? 0) - (right.log.logIndex ?? 0)))
-  let pending0 = 0n
-  let pending1 = 0n
-  for (const event of events) {
-    const { log } = event
-    if (log.blockNumber == null || log.transactionHash == null || log.logIndex == null) continue
-    if (event.kind === 'decrease') {
-      const decrease0 = log.args.amount0 ?? 0n
-      const decrease1 = log.args.amount1 ?? 0n
-      pending0 += decrease0
-      pending1 += decrease1
-      await input.db.insertPositionCashflow({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber, timestampMs: await blockTimestamp(input.client, log.blockNumber), type: 'decrease', token0Raw: decrease0, token1Raw: decrease1, valueUsdg: 0 })
-      continue
-    }
-    const raw0 = log.args.amount0 ?? 0n
-    const raw1 = log.args.amount1 ?? 0n
-    let type: 'deposit' | 'withdrawal' | 'fee' = 'deposit'
-    let amount0 = raw0
-    let amount1 = raw1
-    if (event.kind === 'collect') {
-      const principal0 = raw0 < pending0 ? raw0 : pending0
-      const principal1 = raw1 < pending1 ? raw1 : pending1
-      if (principal0 > 0n || principal1 > 0n) {
-        const value = await valuePair(input.oracle, input.data, principal0, principal1, log.blockNumber)
-        await input.db.insertPositionCashflow({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber, timestampMs: await blockTimestamp(input.client, log.blockNumber), type: 'withdrawal', token0Raw: principal0, token1Raw: principal1, valueUsdg: value })
-        await input.db.insertPositionCashflow({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber, timestampMs: await blockTimestamp(input.client, log.blockNumber), type: 'principal_collect', token0Raw: principal0, token1Raw: principal1, valueUsdg: 0 })
+  if (existing.lastSyncedBlock == null && increases.length === 0) throw new Error('No v3 deposit history was found for this NFT')
+  const [storedPending0, storedPending1] = await input.db.getPendingPrincipal(input.data.id)
+  let pending0 = storedPending0
+  let pending1 = storedPending1
+  for (const blockEvents of groupEventsByBlock(events)) {
+    const blockNumber = blockEvents[0]!.log.blockNumber!
+    const timestampMs = await blockTimestamp(input.client, blockNumber)
+    const cashflows: PositionCashflowWrite[] = []
+    for (const event of blockEvents) {
+      const { log } = event
+      if (log.transactionHash == null || log.logIndex == null) continue
+      if (event.kind === 'decrease') {
+        const decrease0 = log.args.amount0 ?? 0n
+        const decrease1 = log.args.amount1 ?? 0n
+        pending0 += decrease0
+        pending1 += decrease1
+        cashflows.push({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber, timestampMs, type: 'decrease', token0Raw: decrease0, token1Raw: decrease1, valueUsdg: 0 })
+        continue
       }
-      pending0 -= principal0
-      pending1 -= principal1
-      amount0 = raw0 - principal0
-      amount1 = raw1 - principal1
-      type = 'fee'
+      const raw0 = log.args.amount0 ?? 0n
+      const raw1 = log.args.amount1 ?? 0n
+      let type: 'deposit' | 'fee' = 'deposit'
+      let amount0 = raw0
+      let amount1 = raw1
+      if (event.kind === 'collect') {
+        const principal0 = raw0 < pending0 ? raw0 : pending0
+        const principal1 = raw1 < pending1 ? raw1 : pending1
+        if (principal0 > 0n || principal1 > 0n) {
+          const value = await valuePair(input.oracle, input.data, principal0, principal1, blockNumber)
+          cashflows.push({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber, timestampMs, type: 'withdrawal', token0Raw: principal0, token1Raw: principal1, valueUsdg: value })
+          cashflows.push({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber, timestampMs, type: 'principal_collect', token0Raw: principal0, token1Raw: principal1, valueUsdg: 0 })
+        }
+        pending0 -= principal0
+        pending1 -= principal1
+        amount0 = raw0 - principal0
+        amount1 = raw1 - principal1
+        type = 'fee'
+      }
+      if (amount0 === 0n && amount1 === 0n) continue
+      const value = await valuePair(input.oracle, input.data, amount0, amount1, blockNumber)
+      cashflows.push({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber, timestampMs, type, token0Raw: amount0, token1Raw: amount1, valueUsdg: value })
     }
-    if (amount0 === 0n && amount1 === 0n) continue
-    const value = await valuePair(input.oracle, input.data, amount0, amount1, log.blockNumber)
-    await input.db.insertPositionCashflow({ positionId: input.data.id, txHash: log.transactionHash, logIndex: log.logIndex, blockNumber: log.blockNumber, timestampMs: await blockTimestamp(input.client, log.blockNumber), type, token0Raw: amount0, token1Raw: amount1, valueUsdg: value })
+    await input.db.commitAccountingBlock({
+      positionId: input.data.id,
+      blockNumber,
+      status: blockNumber === input.blockNumber ? 'synced' : 'partial',
+      cashflows,
+    })
   }
-  if (increases.length === 0) throw new Error('No v3 deposit history was found for this NFT')
   const pending = await input.db.getPendingPrincipal(input.data.id)
   const newlyIndexed0 = pending[0] - (input.data.pendingPrincipal0 ?? 0n)
   const newlyIndexed1 = pending[1] - (input.data.pendingPrincipal1 ?? 0n)
   if (newlyIndexed0 > 0n) input.data.unclaimed0 = input.data.unclaimed0 > newlyIndexed0 ? input.data.unclaimed0 - newlyIndexed0 : 0n
   if (newlyIndexed1 > 0n) input.data.unclaimed1 = input.data.unclaimed1 > newlyIndexed1 ? input.data.unclaimed1 - newlyIndexed1 : 0n
+}
+
+function groupEventsByBlock<T extends { log: { blockNumber?: bigint | null } }>(events: T[]) {
+  const groups: T[][] = []
+  for (const event of events) {
+    if (event.log.blockNumber == null) continue
+    const current = groups.at(-1)
+    if (!current || current[0]!.log.blockNumber !== event.log.blockNumber) groups.push([event])
+    else current.push(event)
+  }
+  return groups
 }
 
 async function ensureMintInfo(client: PublicClient, db: StateDatabase, data: PositionData) {
