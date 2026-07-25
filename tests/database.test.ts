@@ -106,6 +106,47 @@ describe('state database migrations', () => {
     expect(await database.listPositionCashflows(deposit.positionId)).toHaveLength(1)
   })
 
+  it('never moves an accounting checkpoint backwards', async () => {
+    const database = new StateDatabase(':memory:')
+    databases.push(database)
+    await database.initialize()
+    await database.commitAccountingBlock({ positionId: 'v4:manager:1', blockNumber: 20n, status: 'synced' })
+    await database.commitAccountingBlock({ positionId: 'v4:manager:1', blockNumber: 10n, status: 'partial', error: 'stale writer' })
+
+    expect(await database.getAccounting('v4:manager:1')).toMatchObject({
+      status: 'synced',
+      lastSyncedBlock: 20n,
+      error: undefined,
+    })
+  })
+
+  it('allows only one accounting lease owner and permits takeover after expiry', async () => {
+    const database = new StateDatabase(':memory:')
+    databases.push(database)
+    await database.initialize()
+
+    expect(await database.acquireAccountingLease('v4:manager:1', 'owner-a', 1_000)).toBe(true)
+    expect(await database.acquireAccountingLease('v4:manager:1', 'owner-b', 1_001)).toBe(false)
+    expect(await database.acquireAccountingLease('v4:manager:1', 'owner-b', 301_001)).toBe(true)
+    await database.releaseAccountingLease('v4:manager:1', 'owner-a')
+    expect(await database.acquireAccountingLease('v4:manager:1', 'owner-c', 301_002)).toBe(false)
+    await database.releaseAccountingLease('v4:manager:1', 'owner-b')
+    expect(await database.acquireAccountingLease('v4:manager:1', 'owner-c', 301_003)).toBe(true)
+  })
+
+  it('scopes cached position discovery candidates by wallet', async () => {
+    const database = new StateDatabase(':memory:')
+    databases.push(database)
+    await database.initialize()
+    await database.upsertPosition({ positionId: 'v4:manager:1', version: 'v4', manager: 'manager', tokenId: 1n })
+    await database.upsertPosition({ positionId: 'v4:manager:2', version: 'v4', manager: 'manager', tokenId: 2n })
+    await database.linkWalletPosition('0xwallet-a', 'v4:manager:1', 1)
+    await database.linkWalletPosition('0xwallet-b', 'v4:manager:2', 1)
+
+    expect((await database.listPositionsForWallet('0xWALLET-A')).map((position) => position.positionId)).toEqual(['v4:manager:1'])
+    expect((await database.listPositionsForWallet('0xwallet-b')).map((position) => position.positionId)).toEqual(['v4:manager:2'])
+  })
+
   it('atomically activates a Discord report generation and retains stale messages for cleanup', async () => {
     const database = new StateDatabase(':memory:')
     databases.push(database)

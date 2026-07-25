@@ -1,5 +1,6 @@
 import type { PublicClient } from 'viem'
 import { getAddress, zeroAddress } from 'viem'
+import { randomUUID } from 'node:crypto'
 import { v3PositionManagerAbi, v4PoolManagerAbi, v4StateViewAbi, type DeploymentAddresses } from '../contracts.js'
 import type { PositionCashflowWrite, StateDatabase } from '../state/database.js'
 import type { PortfolioPriceOracle } from './price-oracle.js'
@@ -19,21 +20,25 @@ export async function syncPositionAccounting(input: {
   blockNumber: bigint
 }) {
   if (input.data.liquidity === 0n) return
+  const leaseOwnerId = randomUUID()
+  if (!(await input.db.acquireAccountingLease(input.data.id, leaseOwnerId))) return
   try {
     if (input.data.hooks && (BigInt(input.data.hooks) & CUSTOM_LIQUIDITY_DELTA_FLAGS) !== 0n) {
       throw new Error('The pool hook changes liquidity deltas; accounting cannot be reconstructed safely')
     }
     const mint = await ensureMintInfo(input.client, input.db, input.data)
     if (!mint) throw new Error('Mint block was not available from Blockscout')
-    if (input.data.position.version === 'v3') await syncV3({ ...input, mintBlock: mint.blockNumber })
-    else await syncV4({ ...input, mintBlock: mint.blockNumber })
-    await input.db.commitAccountingBlock({ positionId: input.data.id, blockNumber: input.blockNumber, status: 'synced' })
+    if (input.data.position.version === 'v3') await syncV3({ ...input, mintBlock: mint.blockNumber, leaseOwnerId })
+    else await syncV4({ ...input, mintBlock: mint.blockNumber, leaseOwnerId })
+    await input.db.commitAccountingBlock({ positionId: input.data.id, blockNumber: input.blockNumber, status: 'synced', leaseOwnerId })
   } catch (error) {
-    await input.db.markAccountingFailure(input.data.id, error instanceof Error ? error.message : String(error))
+    await input.db.markAccountingFailure(input.data.id, error instanceof Error ? error.message : String(error), leaseOwnerId)
+  } finally {
+    await input.db.releaseAccountingLease(input.data.id, leaseOwnerId)
   }
 }
 
-async function syncV4(input: Parameters<typeof syncPositionAccounting>[0] & { mintBlock: bigint }) {
+async function syncV4(input: Parameters<typeof syncPositionAccounting>[0] & { mintBlock: bigint; leaseOwnerId: string }) {
   if (!input.deployments.v4PoolManager || !input.deployments.v4StateView || !input.data.poolId) throw new Error('Uniswap v4 accounting contracts are not configured')
   const existing = await input.db.getAccounting(input.data.id)
   const fromBlock = existing.lastSyncedBlock != null ? existing.lastSyncedBlock + 1n : input.mintBlock
@@ -111,11 +116,12 @@ async function syncV4(input: Parameters<typeof syncPositionAccounting>[0] & { mi
       blockNumber: log.blockNumber,
       status: log.blockNumber === input.blockNumber ? 'synced' : 'partial',
       cashflows,
+      leaseOwnerId: input.leaseOwnerId,
     })
   }
 }
 
-async function syncV3(input: Parameters<typeof syncPositionAccounting>[0] & { mintBlock: bigint }) {
+async function syncV3(input: Parameters<typeof syncPositionAccounting>[0] & { mintBlock: bigint; leaseOwnerId: string }) {
   const existing = await input.db.getAccounting(input.data.id)
   const fromBlock = existing.lastSyncedBlock != null ? existing.lastSyncedBlock + 1n : input.mintBlock
   if (fromBlock > input.blockNumber) return
@@ -176,6 +182,7 @@ async function syncV3(input: Parameters<typeof syncPositionAccounting>[0] & { mi
       blockNumber,
       status: blockNumber === input.blockNumber ? 'synced' : 'partial',
       cashflows,
+      leaseOwnerId: input.leaseOwnerId,
     })
   }
   const pending = await input.db.getPendingPrincipal(input.data.id)

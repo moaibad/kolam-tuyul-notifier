@@ -40,12 +40,14 @@ export async function discoverOpenPositions(input: { client: PublicClient; walle
 
   const unique = [...new Map(positions.map((position) => [`${position.version}:${position.manager.toLowerCase()}:${position.tokenId.toString()}`, position])).values()]
   for (const position of unique) {
+    const positionId = `${position.version}:${position.manager.toLowerCase()}:${position.tokenId.toString()}`
     await input.db?.upsertPosition({
-      positionId: `${position.version}:${position.manager.toLowerCase()}:${position.tokenId.toString()}`,
+      positionId,
       version: position.version,
       manager: position.manager,
       tokenId: position.tokenId,
     })
+    await input.db?.linkWalletPosition(input.walletAddress, positionId)
   }
   return { positions: unique, warnings }
 }
@@ -64,7 +66,7 @@ async function discoverV4Positions(client: PublicClient, manager: Address, walle
   const byExplorer = await discoverV4PositionsFromBlockscout(client, manager, walletAddress, warnings)
   if (byExplorer.length > 0) return byExplorer
 
-  const cachedCandidates = (db ? await db.listPositions() : []).filter((position) => position.version === 'v4' && position.manager.toLowerCase() === manager.toLowerCase())
+  const cachedCandidates = (db ? await db.listPositionsForWallet(walletAddress) : []).filter((position) => position.version === 'v4' && position.manager.toLowerCase() === manager.toLowerCase())
   const cached: DiscoveredPosition[] = []
   for (const position of cachedCandidates) {
     try {

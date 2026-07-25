@@ -9,7 +9,10 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "lint": "eslint .",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@libsql/client": "^0.17.4",
@@ -18,6 +21,7 @@
     "@uniswap/v4-sdk": "latest",
     "discord.js": "latest",
     "dotenv": "latest",
+    "drizzle-orm": "^0.45.2",
     "pino": "latest",
     "viem": "latest",
     "zod": "latest"
@@ -26,6 +30,7 @@
     "@types/node": "latest",
     "@typescript-eslint/eslint-plugin": "latest",
     "@typescript-eslint/parser": "latest",
+    "drizzle-kit": "^0.31.10",
     "eslint": "latest",
     "tsx": "latest",
     "typescript": "latest",

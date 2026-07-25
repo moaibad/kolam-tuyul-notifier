@@ -11,12 +11,11 @@ import { StateDatabase } from './state/database.js'
 
 const config = loadConfig()
 const logger = pino({ level: config.logLevel })
-const db = new StateDatabase(config.stateDatabasePath)
+const db = new StateDatabase(config.tursoDatabaseUrl, config.tursoAuthToken)
 const client = createChainClient(config)
 const deployments = resolveDeployments()
 
 try {
-  await db.initialize()
   await validateContractCode(client, deployments)
   const discord = await createDiscordClient(config)
   const refreshService = new RefreshService(config, client, db, deployments)

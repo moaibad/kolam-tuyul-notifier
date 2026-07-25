@@ -1,6 +1,10 @@
 import { createClient, type Client, type InValue, type Row } from '@libsql/client'
+import { drizzle, type LibSQLDatabase } from 'drizzle-orm/libsql'
+import { migrate } from 'drizzle-orm/libsql/migrator'
+import { resolve } from 'node:path'
 import type { RangeStatus } from '../types.js'
 import type { AccountingStatus, PositionVersion } from '../types.js'
+import { schema } from './schema.js'
 
 export interface StoredPositionStatus {
   positionId: string
@@ -52,9 +56,11 @@ export interface PositionCashflowWrite {
 
 export class StateDatabase {
   readonly db: Client
+  readonly orm: LibSQLDatabase<typeof schema>
 
-  constructor(path: string) {
-    this.db = createClient({ url: toLibsqlUrl(path) })
+  constructor(url: string, authToken?: string) {
+    this.db = createClient({ url: toLibsqlUrl(url), authToken })
+    this.orm = drizzle(this.db, { schema })
   }
 
   close() {
@@ -62,95 +68,7 @@ export class StateDatabase {
   }
 
   async initialize() {
-    await this.db.executeMultiple(`
-      CREATE TABLE IF NOT EXISTS sync_state (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS positions (
-        position_id TEXT PRIMARY KEY,
-        version TEXT NOT NULL,
-        manager TEXT NOT NULL,
-        token_id TEXT NOT NULL,
-        mint_timestamp_ms INTEGER,
-        mint_block TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS position_status (
-        position_id TEXT PRIMARY KEY,
-        last_status TEXT,
-        out_of_range_since_ms INTEGER
-      );
-
-      CREATE TABLE IF NOT EXISTS cashflows (
-        tx_hash TEXT NOT NULL,
-        log_index INTEGER NOT NULL,
-        position_id TEXT NOT NULL,
-        block_number TEXT NOT NULL,
-        timestamp_ms INTEGER NOT NULL,
-        type TEXT NOT NULL,
-        amount_usdg REAL NOT NULL,
-        PRIMARY KEY (tx_hash, log_index)
-      );
-
-      CREATE TABLE IF NOT EXISTS token_metadata (
-        address TEXT PRIMARY KEY,
-        symbol TEXT NOT NULL,
-        decimals INTEGER NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS position_accounting (
-        position_id TEXT PRIMARY KEY,
-        status TEXT NOT NULL,
-        deposited_usdg REAL,
-        withdrawn_usdg REAL,
-        claimed_fees_usdg REAL,
-        last_synced_block TEXT,
-        error TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS position_cashflows_v2 (
-        position_id TEXT NOT NULL,
-        tx_hash TEXT NOT NULL,
-        log_index INTEGER NOT NULL,
-        block_number TEXT NOT NULL,
-        timestamp_ms INTEGER NOT NULL,
-        type TEXT NOT NULL,
-        token0_raw TEXT NOT NULL,
-        token1_raw TEXT NOT NULL,
-        value_usdg REAL NOT NULL,
-        PRIMARY KEY (position_id, tx_hash, log_index, type)
-      );
-
-      CREATE TABLE IF NOT EXISTS discord_report_messages (
-        message_id TEXT PRIMARY KEY,
-        message_key TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        position_id TEXT,
-        generation TEXT NOT NULL,
-        status TEXT NOT NULL,
-        created_at_ms INTEGER NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS discord_report_messages_status_idx
-        ON discord_report_messages(status);
-
-      CREATE TABLE IF NOT EXISTS reference_pools (
-        pool_key TEXT PRIMARY KEY,
-        version TEXT NOT NULL,
-        pool_address TEXT NOT NULL,
-        token0_address TEXT NOT NULL,
-        token1_address TEXT NOT NULL,
-        fee_tier INTEGER NOT NULL,
-        liquidity TEXT NOT NULL,
-        discovered_block TEXT NOT NULL,
-        refreshed_at_ms INTEGER NOT NULL
-      );
-
-      CREATE INDEX IF NOT EXISTS reference_pools_pair_idx
-        ON reference_pools(token0_address, token1_address);
-    `)
+    await migrate(this.orm, { migrationsFolder: resolve(process.cwd(), 'drizzle') })
   }
 
   async listDiscordReportMessages(status?: StoredDiscordReportMessage['status']): Promise<StoredDiscordReportMessage[]> {
@@ -226,6 +144,34 @@ export class StateDatabase {
     return (await this.listPositions()).find((position) => position.positionId === positionId)
   }
 
+  async linkWalletPosition(walletAddress: string, positionId: string, lastSeenAtMs = Date.now()) {
+    await this.execute(`
+      INSERT INTO wallet_positions(wallet_address, position_id, last_seen_at_ms)
+      VALUES(?, ?, ?)
+      ON CONFLICT(wallet_address, position_id) DO UPDATE SET last_seen_at_ms = excluded.last_seen_at_ms
+    `, walletAddress.toLowerCase(), positionId, lastSeenAtMs)
+  }
+
+  async listPositionsForWallet(walletAddress: string) {
+    const rows = (await this.db.execute({
+      sql: `
+        SELECT p.position_id, p.version, p.manager, p.token_id, p.mint_timestamp_ms, p.mint_block
+        FROM positions p
+        INNER JOIN wallet_positions wp ON wp.position_id = p.position_id
+        WHERE wp.wallet_address = ?
+      `,
+      args: [walletAddress.toLowerCase()],
+    })).rows
+    return rows.map((row) => ({
+      positionId: String(row.position_id),
+      version: String(row.version) as PositionVersion,
+      manager: String(row.manager),
+      tokenId: BigInt(String(row.token_id)),
+      mintTimestampMs: row.mint_timestamp_ms == null ? undefined : Number(row.mint_timestamp_ms),
+      mintBlock: row.mint_block == null ? undefined : BigInt(String(row.mint_block)),
+    }))
+  }
+
   async getMintTimestamp(positionId: string): Promise<number | undefined> {
     const row = await this.first('SELECT mint_timestamp_ms FROM positions WHERE position_id = ?', positionId)
     return row?.mint_timestamp_ms == null ? undefined : Number(row.mint_timestamp_ms)
@@ -238,10 +184,6 @@ export class StateDatabase {
 
   async setPositionStatus(positionId: string, status: RangeStatus, outOfRangeSinceMs?: number) {
     await this.execute('INSERT INTO position_status(position_id, last_status, out_of_range_since_ms) VALUES(?, ?, ?) ON CONFLICT(position_id) DO UPDATE SET last_status = excluded.last_status, out_of_range_since_ms = excluded.out_of_range_since_ms', positionId, status, outOfRangeSinceMs ?? null)
-  }
-
-  async insertCashflow(input: { txHash: string; logIndex: number; positionId: string; blockNumber: bigint; timestampMs: number; type: string; amountUsdg: number }) {
-    await this.execute('INSERT OR IGNORE INTO cashflows(tx_hash, log_index, position_id, block_number, timestamp_ms, type, amount_usdg) VALUES(?, ?, ?, ?, ?, ?, ?)', input.txHash, input.logIndex, input.positionId, input.blockNumber.toString(), input.timestampMs, input.type, input.amountUsdg)
   }
 
   async getAccounting(positionId: string) {
@@ -281,6 +223,7 @@ export class StateDatabase {
     status: AccountingStatus
     cashflows?: PositionCashflowWrite[]
     error?: string
+    leaseOwnerId?: string
   }) {
     const cashflows = input.cashflows ?? []
     await this.db.batch([
@@ -309,12 +252,21 @@ export class StateDatabase {
             ?
           )
           ON CONFLICT(position_id) DO UPDATE SET
-            status = excluded.status,
+            status = CASE
+              WHEN position_accounting.last_synced_block IS NULL
+                OR CAST(excluded.last_synced_block AS INTEGER) >= CAST(position_accounting.last_synced_block AS INTEGER)
+              THEN excluded.status ELSE position_accounting.status END,
             deposited_usdg = excluded.deposited_usdg,
             withdrawn_usdg = excluded.withdrawn_usdg,
             claimed_fees_usdg = excluded.claimed_fees_usdg,
-            last_synced_block = excluded.last_synced_block,
-            error = excluded.error
+            last_synced_block = CASE
+              WHEN position_accounting.last_synced_block IS NULL
+                OR CAST(excluded.last_synced_block AS INTEGER) >= CAST(position_accounting.last_synced_block AS INTEGER)
+              THEN excluded.last_synced_block ELSE position_accounting.last_synced_block END,
+            error = CASE
+              WHEN position_accounting.last_synced_block IS NULL
+                OR CAST(excluded.last_synced_block AS INTEGER) >= CAST(position_accounting.last_synced_block AS INTEGER)
+              THEN excluded.error ELSE position_accounting.error END
         `,
         args: [
           input.positionId,
@@ -326,10 +278,14 @@ export class StateDatabase {
           input.error ?? null,
         ],
       },
+      ...(input.leaseOwnerId ? [{
+        sql: 'UPDATE accounting_sync_leases SET expires_at_ms = ? WHERE position_id = ? AND owner_id = ?',
+        args: [Date.now() + 5 * 60_000, input.positionId, input.leaseOwnerId],
+      }] : []),
     ], 'write')
   }
 
-  async markAccountingFailure(positionId: string, error: string) {
+  async markAccountingFailure(positionId: string, error: string, leaseOwnerId?: string) {
     const existing = await this.getAccounting(positionId)
     if (existing.lastSyncedBlock == null) {
       await this.setAccounting({
@@ -347,7 +303,26 @@ export class StateDatabase {
       blockNumber: existing.lastSyncedBlock,
       status: 'partial',
       error,
+      leaseOwnerId,
     })
+  }
+
+  async acquireAccountingLease(positionId: string, ownerId: string, nowMs = Date.now()) {
+    const expiresAtMs = nowMs + 5 * 60_000
+    await this.execute(`
+      INSERT INTO accounting_sync_leases(position_id, owner_id, expires_at_ms)
+      VALUES(?, ?, ?)
+      ON CONFLICT(position_id) DO UPDATE SET
+        owner_id = excluded.owner_id,
+        expires_at_ms = excluded.expires_at_ms
+      WHERE accounting_sync_leases.expires_at_ms <= ? OR accounting_sync_leases.owner_id = ?
+    `, positionId, ownerId, expiresAtMs, nowMs, ownerId)
+    const row = await this.first('SELECT owner_id FROM accounting_sync_leases WHERE position_id = ?', positionId)
+    return row?.owner_id === ownerId
+  }
+
+  async releaseAccountingLease(positionId: string, ownerId: string) {
+    await this.execute('DELETE FROM accounting_sync_leases WHERE position_id = ? AND owner_id = ?', positionId, ownerId)
   }
 
   async getPositionCashflowTotals(positionId: string) {
