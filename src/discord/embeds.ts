@@ -10,6 +10,8 @@ const color = {
   alert: 0xef4444,
 }
 
+const sectionSeparator = '-# ────────────────────'
+
 export const refreshButtonCustomId = 'kolam-refresh-now'
 
 export function buildPortfolioEmbed(portfolio: PortfolioSnapshot) {
@@ -101,22 +103,23 @@ function positionSection(position: PositionSnapshot, totalFeesQuote: number | nu
   const state = position.accountingStatus === 'unavailable' ? 'Unavailable' : position.accountingStatus === 'partial' ? 'Partial' : 'Synchronizing'
   const lines = position.accountingStatus === 'synced'
     ? [
-        `Deposit: **${formatQuoteValue(position.depositedValueQuote, position)}**`,
-        `Current: **${formatQuoteValue(position.activeLpValueQuote, position)}**`,
-        `Fees: **${formatQuoteValue(totalFeesQuote, position)}**`,
-        `-# Claimed: ${formatQuoteValue(position.claimedFeesValueQuote, position)} · Unclaimed: ${formatQuoteValue(position.unclaimedFeesValueQuote, position)}`,
-        `Result: **${formatQuoteValue(position.totalResultValueQuote, position)}**`,
+        `Deposit: ${formatQuoteValue(position.depositedValueQuote, position)}`,
+        `Current: ${formatQuoteValue(position.activeLpValueQuote, position)}`,
+        `Fees: ${formatQuoteValue(totalFeesQuote, position)}`,
+        `-# Claimed: ${formatQuoteValue(position.claimedFeesValueQuote, position)} · Unclaimed: **${formatQuoteValue(position.unclaimedFeesValueQuote, position)}**`,
+        `Result: ${formatQuoteValue(position.totalResultValueQuote, position)}`,
         `P/L: **${formatCompactQuoteResult(position.netLpResultQuote, position.netLpResultPercent, position)}**`,
         '-# Includes IL + fees',
       ]
     : [
-        `Deposit: **${state}**`,
-        `Current: **${formatQuoteValue(position.activeLpValueQuote, position)}**`,
-        `Fees: **${state}**`,
-        `Result: **${state}**`,
-        `P/L: **${state}**`,
+        `Deposit: ${state}`,
+        `Current: ${formatQuoteValue(position.activeLpValueQuote, position)}`,
+        `Fees: ${state}`,
+        `Result: ${state}`,
+        `P/L: ${state}`,
       ]
   if (accountingNotice) lines.push(`-# ⚠️ ${accountingNotice.replaceAll('*', '')}`)
+  lines.push(sectionSeparator)
   return { name: '💼 Position', value: trimText(lines.join('\n'), 1_024), inline: false }
 }
 
@@ -136,7 +139,7 @@ function valueSection(position: PositionSnapshot) {
     : `${totalPrimary} (${totalUsdg == null ? 'USDG unavailable' : formatDollar(totalUsdg)})`
   return {
     name: '💧 Value',
-    value: [`Total: **${total}**`, ...tokenLines].join('\n'),
+    value: [`Total: ${total}`, ...tokenLines.map((line) => `-# ${line}`), sectionSeparator].join('\n'),
     inline: false,
   }
 }
@@ -149,8 +152,10 @@ function statusSection(position: PositionSnapshot, outOfRangeEmphasisAfterMs: nu
     name: '📍 Status',
     value: [
       `${statusIcon} **${status}**`,
-      `Price: **${formatPrice(position.currentPrice)} ${quote}**`,
-      `-# Range: ${formatPrice(position.lowerPrice)} – ${formatPrice(position.upperPrice)} ${quote}`,
+      `Price: ${formatPrice(position.currentPrice)} ${quote}`,
+      `Lower: \`${formatPrice(position.lowerPrice)}\``,
+      `Upper: \`${formatPrice(position.upperPrice)}\``,
+      `-# Quote: ${quote}`,
       getRangeMarker(position),
     ].join('\n'),
     inline: false,

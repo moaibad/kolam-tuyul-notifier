@@ -111,16 +111,17 @@ describe('position embed', () => {
     expect(fieldValue(embed, 'MEME')).toBeUndefined()
     expect(fieldValue(embed, 'USDG')).toBeUndefined()
     expect(fieldValue(embed, '💧 Value')).toBe(
-      'Total: **2,841.5200 VERY-LONG-QUOTE ($2,841.52)**\nMEME: 12,450.00 ($1,551.27)\nUSDG: 1,290.25 ($1,290.25)',
+      'Total: 2,841.5200 VERY-LONG-QUOTE ($2,841.52)\n-# MEME: 12,450.00 ($1,551.27)\n-# USDG: 1,290.25 ($1,290.25)\n-# ────────────────────',
     )
-    expect(fieldValue(embed, '💼 Position')).toContain('Deposit: **2,000.0000 VERY-LONG-QUOTE ($3,000.00)**')
-    expect(fieldValue(embed, '💼 Position')).toContain('Current: **2,841.5200 VERY-LONG-QUOTE ($4,262.28)**')
-    expect(fieldValue(embed, '💼 Position')).toContain('Fees: **27.6200 VERY-LONG-QUOTE ($41.43)**')
-    expect(fieldValue(embed, '💼 Position')).toContain('-# Claimed:')
-    expect(fieldValue(embed, '💼 Position')).toContain('Result: **2,927.6200 VERY-LONG-QUOTE ($4,391.43)**')
+    expect(fieldValue(embed, '💼 Position')).toContain('Deposit: 2,000.0000 VERY-LONG-QUOTE ($3,000.00)')
+    expect(fieldValue(embed, '💼 Position')).toContain('Current: 2,841.5200 VERY-LONG-QUOTE ($4,262.28)')
+    expect(fieldValue(embed, '💼 Position')).toContain('Fees: 27.6200 VERY-LONG-QUOTE ($41.43)')
+    expect(fieldValue(embed, '💼 Position')).toContain('-# Claimed: 9.2000 VERY-LONG-QUOTE ($13.80) · Unclaimed: **18.4200 VERY-LONG-QUOTE ($27.63)**')
+    expect(fieldValue(embed, '💼 Position')).toContain('Result: 2,927.6200 VERY-LONG-QUOTE ($4,391.43)')
     expect(fieldValue(embed, '💼 Position')).toContain('P/L: **-72.3800 VERY-LONG-QUOTE (-$108.57) · -2.41%**')
+    expect(fieldValue(embed, '💼 Position')).toMatch(/-# ─{20}$/)
     expect(fieldValue(embed, '📍 Status')).toBe(
-      '🟢 **IN RANGE**\nPrice: **0.033239 VERY-LONG-QUOTE**\n-# Range: 0.023391 – 0.040949 VERY-LONG-QUOTE\n`├───────●───────┤`',
+      '🟢 **IN RANGE**\nPrice: 0.033239 VERY-LONG-QUOTE\nLower: `0.023391`\nUpper: `0.040949`\n-# Quote: VERY-LONG-QUOTE\n`├───────●───────┤`',
     )
     expect(embed.footer?.text).toBe('Age 25 minutes · Block 38,291,407')
     expect(JSON.stringify(embed)).not.toContain('```')
@@ -146,8 +147,10 @@ describe('position embed', () => {
       upperPrice: 0.00000004567,
     }), 15 * 60_000, 25 * 60_000).toJSON()
 
-    expect(fieldValue(embed, '📍 Status')).toContain('Price: **0.00000003142 USDG**')
-    expect(fieldValue(embed, '📍 Status')).toContain('-# Range: 0 – 0.00000004567 USDG')
+    expect(fieldValue(embed, '📍 Status')).toContain('Price: 0.00000003142 USDG')
+    expect(fieldValue(embed, '📍 Status')).toContain('Lower: `0`')
+    expect(fieldValue(embed, '📍 Status')).toContain('Upper: `0.00000004567`')
+    expect(fieldValue(embed, '📍 Status')).toContain('-# Quote: USDG')
   })
 
   it('keeps quote values available when the USDG conversion route is missing', () => {
@@ -170,13 +173,13 @@ describe('position embed', () => {
     const embed = buildPositionEmbed(position, 15 * 60_000, 25 * 60_000).toJSON()
 
     expect(fieldValue(embed, '💧 Value')).toContain('GME: 2.0000 (USDG unavailable)')
-    expect(fieldValue(embed, '💧 Value')).toContain('Total: **2,841.5200 ETH (USDG unavailable)**')
+    expect(fieldValue(embed, '💧 Value')).toContain('Total: 2,841.5200 ETH (USDG unavailable)')
   })
 
   it('does not duplicate the LP total conversion for a USDG quote pair', () => {
     const embed = buildPositionEmbed(basePosition(), 15 * 60_000, 25 * 60_000).toJSON()
-    expect(fieldValue(embed, '💧 Value')).toContain('Total: **2,841.52 USDG**')
-    expect(fieldValue(embed, '💧 Value')).not.toContain('Total: **2,841.52 USDG ($')
+    expect(fieldValue(embed, '💧 Value')).toContain('Total: 2,841.52 USDG')
+    expect(fieldValue(embed, '💧 Value')).not.toContain('Total: 2,841.52 USDG ($')
   })
 
   it('shows a zero token amount as zero USDG', () => {
@@ -241,10 +244,10 @@ describe('position embed', () => {
     const embed = buildPositionEmbed(position, 15 * 60_000, 25 * 60_000).toJSON()
 
     expect(embed.color).toBe(0x5865f2)
-    expect(fieldValue(embed, '💼 Position')).toContain(`Deposit: **${label}**`)
+    expect(fieldValue(embed, '💼 Position')).toContain(`Deposit: ${label}`)
     expect(fieldValue(embed, '💧 Value')).toContain('MEME: 12,450.00 ($1,551.27)')
-    expect(fieldValue(embed, '💼 Position')).toContain(`Fees: **${label}**`)
-    expect(fieldValue(embed, '💼 Position')).toContain(`P/L: **${label}**`)
+    expect(fieldValue(embed, '💼 Position')).toContain(`Fees: ${label}`)
+    expect(fieldValue(embed, '💼 Position')).toContain(`P/L: ${label}`)
     expect(fieldValue(embed, '💼 Position')).toContain(notice)
     expect(JSON.stringify(embed)).not.toContain('0.00 USDG')
   })
